@@ -9,9 +9,9 @@
     "preview": "vite preview --port 4174 --host"
   },
   "dependencies": {
-    "@dual/agnes-client": "*",
-    "@dual/glm-client": "*",
-    "@dual/ui": "*",
+    "@dual/agnes-client": "file:local-packages/agnes-client",
+    "@dual/glm-client": "file:local-packages/glm-client",
+    "@dual/ui": "file:local-packages/ui",
     "@react-three/drei": "^9.92.0",
     "@react-three/fiber": "^8.15.0",
     "@tauri-apps/api": "^2",
