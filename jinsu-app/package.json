@@ -1,0 +1,32 @@
+{
+  "name": "@dual/shortdrama",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4174 --host"
+  },
+  "dependencies": {
+    "@dual/agnes-client": "*",
+    "@dual/glm-client": "*",
+    "@dual/ui": "*",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.160.0",
+    "mammoth": "^1.9.0",
+    "@react-three/fiber": "^8.15.0",
+    "@react-three/drei": "^9.92.0",
+    "@xyflow/react": "^12.0.0",
+    "zustand": "^4.5.0",
+    "lucide-react": "^0.400.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.2",
+    "typescript": "^5.4.0"
+  }
+}
