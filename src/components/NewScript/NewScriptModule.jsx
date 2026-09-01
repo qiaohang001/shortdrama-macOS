@@ -99,6 +99,7 @@ export function NewScriptModule({ project, update, log, onSwitchTab }) {
       }
 
       log("正在分析剧本内容...");
+      log("⏳ 剧本较长，AI分析约需1-3分钟，请耐心等待，期间请勿重复点击");
 
       // 未登录用户不能使用
       if (!isLoggedIn()) {
@@ -152,7 +153,7 @@ ${scriptContent.slice(0, 20000)}
         const res = await api("/api/llm/chat", {
           method: "POST",
           body: JSON.stringify({
-            messages: [{ role: "user", content: prompt }], max_tokens: 16384, llm_type: "script_analyze"
+            messages: [{ role: "user", content: prompt }], max_tokens: 8192, llm_type: "script_analyze"
           })
         });
 

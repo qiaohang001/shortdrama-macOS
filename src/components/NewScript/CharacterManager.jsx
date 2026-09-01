@@ -5,12 +5,14 @@ import { getPrice } from "../../utils/pricing-utils.js";
 
 // 生图风格选项
 const STYLE_OPTIONS = [
-  { value: "anime", label: "动漫/游戏原画", desc: "专业角色设定图风格，动漫/游戏原画品质" },
-  { value: "realistic", label: "写实真人", desc: "超写实真人照片风格，真实皮肤质感，电影级光影" },
-  { value: "wuxia", label: "国风武侠", desc: "中国古风武侠风格，水墨意境，传统服饰，工笔重彩" },
-  { value: "cyberpunk", label: "赛博朋克", desc: "赛博朋克科幻风格，霓虹灯光，机械义体，未来都市" },
-  { value: "moe", label: "二次元萌系", desc: "日系二次元萌系风格，大眼睛，可爱画风，明亮色彩" },
-  { value: "3d", label: "3D渲染", desc: "3D渲染风格，PBR材质，次世代游戏角色，精细建模" },
+  { value: "cinematic", label: "电影级写实", desc: "电影级写实风格，胶片质感，专业光影，高对比度" },
+  { value: "anime", label: "动漫风格", desc: "动漫风格，色彩鲜艳，表情生动，日式动画美学" },
+  { value: "realistic", label: "超写实", desc: "超写实照片风格，真实皮肤质感，自然光影，极致细节" },
+  { value: "noir", label: "黑色电影", desc: "黑色电影风格，黑白高反差，深邃阴影，神秘氛围" },
+  { value: "cyberpunk", label: "赛博朋克", desc: "赛博朋克风格，霓虹灯光，未来都市，高科技低生活" },
+  { value: "fantasy", label: "奇幻风格", desc: "奇幻风格，魔法氛围，空灵光线，梦幻意境" },
+  { value: "horror", label: "恐怖风格", desc: "恐怖风格，黑暗氛围，阴森光线，悬疑惊悚" },
+  { value: "comedy", label: "喜剧风格", desc: "喜剧风格，明亮色彩，欢快氛围，夸张表情" },
 ];
 
 export function CharacterManager({ project, update, log }) {
@@ -166,7 +168,8 @@ ${content.slice(0, 5000)}
                          /(女主|小姐|夫人|公主|姐姐|妹妹|母亲|女儿|女|她)/.test(role + char.name + personality) ? "女性" : "";
       const styleObj = STYLE_OPTIONS.find(s => s.value === selectedStyle) || STYLE_OPTIONS[0];
       const styleDesc = styleObj.desc;
-      const prompt = `角色设定三视图，${char.name}，${genderHint}，${role}，${appearance}，性格气质：${personality}。同一角色的三个视角并排展示：正面视图、侧面视图（左侧）、背面视图。全身像，自然站立姿势，双臂自然下垂，双脚与肩同宽。纯白色无背景背景，无阴影，无环境元素，纯净角色设定图。超高清细节，8K分辨率，服装纹理清晰，发型准确，体型一致，三个视角外貌完全统一。${styleDesc}。注意：此角色为「${char.name}」，请根据其身份「${role}」和性格「${personality}」生成独特的外貌和服装，不要与其他角色混淆。`;
+      const defaultPrompt = `角色设定三视图，${char.name}，${genderHint}，${role}，${appearance}，性格气质：${personality}。同一角色的三个视角并排展示：正面视图、侧面视图（左侧）、背面视图。全身像，自然站立姿势，双臂自然下垂，双脚与肩同宽。纯白色无背景背景，无阴影，无环境元素，纯净角色设定图。超高清细节，8K分辨率，服装纹理清晰，发型准确，体型一致，三个视角外貌完全统一。${styleDesc}。注意：此角色为「${char.name}」，请根据其身份「${role}」和性格「${personality}」生成独特的外貌和服装，不要与其他角色混淆。`;
+      const prompt = (char.promptCn && char.promptCn.trim().length > 0) ? char.promptCn.trim() : defaultPrompt;
       const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1328x1328", n: 1 });
       const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
       if (!imageUrl) throw new Error("未返回图片地址");
@@ -178,7 +181,7 @@ ${content.slice(0, 5000)}
         const newChars = allChars.map(x => {
           if (x.id === char.id) {
             console.log("[人物生成] 匹配到人物:", x.name, "，更新图片");
-            return { ...x, image: imageUrl };
+            return { ...x, image: imageUrl, promptCn: prompt };
           }
           return x;
         });
@@ -274,6 +277,16 @@ ${content.slice(0, 5000)}
             <div style={{ fontWeight: 600 }}>{c.name}</div>
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>{c.role || "未设定"}</div>
             {c.personality && <div style={{ fontSize: 10, color: "var(--text-secondary)", marginTop: 2 }}>性格：{c.personality}</div>}
+            <div style={{ fontSize: 10, color: "var(--text-secondary)", marginTop: 6, marginBottom: 2 }}>🎨 生成提示词（可编辑）</div>
+            <textarea
+              style={{ width: "100%", minHeight: 80, fontSize: 10, boxSizing: "border-box", resize: "vertical", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", padding: 6 }}
+              value={c.promptCn || ""}
+              onChange={(e) => update(prev => {
+                const allChars = prev.materials?.characters || [];
+                return { materials: { ...prev.materials, characters: allChars.map(x => x.id === c.id ? { ...x, promptCn: e.target.value } : x) } };
+              })}
+              placeholder="AI生成后提示词会显示在这里，可修改后再次生成"
+            />
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
               <button
                 style={{ flex: 1, minWidth: "45%", padding: "4px 0", border: generatingCharIds[c.id] ? "1px solid #f59e0b" : "1px solid #7A5CFF", borderRadius: 4, background: generatingCharIds[c.id] ? "rgba(245,158,11,0.15)" : "rgba(122,92,255,0.15)", color: generatingCharIds[c.id] ? "#f59e0b" : "#7A5CFF", fontSize: 11, cursor: generatingCharIds[c.id] ? "wait" : "pointer" }}

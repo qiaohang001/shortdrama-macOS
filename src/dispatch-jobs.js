@@ -57,7 +57,19 @@ async function autoRelogin() {
 
 async function api(path, opts = {}, _retry = false) {
   const url = baseUrl() + path;
-  const res = await fetch(url, { ...opts, headers: { ...headers(), ...(opts.headers || {}) } });
+  // 请求超时：默认300秒（LLM/视频等长任务），网络挂起时及时报错；可传 timeout(ms) 覆盖
+  const { timeout = 300000, signal: externalSignal, ...fetchOpts } = opts;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  if (externalSignal) {
+    externalSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  let res;
+  try {
+    res = await fetch(url, { ...fetchOpts, headers: { ...headers(), ...(opts.headers || {}) }, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   let data = {};
   try {
     data = await res.json();

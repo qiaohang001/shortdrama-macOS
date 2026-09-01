@@ -74,8 +74,15 @@ async function request(path, options = {}) {
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
+  // 请求超时：默认90秒，防止网络挂起时无限等待；长任务可传 timeout(ms) 覆盖
+  const { timeout = 90000, signal: externalSignal, ...fetchOpts } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  if (externalSignal) {
+    externalSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
   try {
-    const response = await fetch(url, { ...options, headers });
+    const response = await fetch(url, { ...fetchOpts, headers, signal: controller.signal });
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.message || data.detail || "请求失败");
@@ -84,6 +91,8 @@ async function request(path, options = {}) {
   } catch (error) {
     console.error("API请求错误:", error);
     throw error;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

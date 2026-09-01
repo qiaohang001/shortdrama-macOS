@@ -4,12 +4,14 @@ import { invoke } from "@tauri-apps/api/core";
 
 // 生图风格选项
 const STYLE_OPTIONS = [
-  { value: "cinematic", label: "电影写实", desc: "电影级写实风格，胶片质感，专业光影，高对比度" },
-  { value: "anime", label: "动漫/游戏原画", desc: "专业角色设定图风格，动漫/游戏原画品质" },
-  { value: "realistic", label: "超写实真人", desc: "超写实真人照片风格，真实皮肤质感，电影级光影" },
-  { value: "wuxia", label: "国风武侠", desc: "中国古风武侠风格，水墨意境，传统服饰，工笔重彩" },
-  { value: "cyberpunk", label: "赛博朋克", desc: "赛博朋克科幻风格，霓虹灯光，机械义体，未来都市" },
-  { value: "3d", label: "3D渲染", desc: "3D渲染风格，PBR材质，次世代游戏画面，精细建模" },
+  { value: "cinematic", label: "电影级写实", desc: "电影级写实风格，胶片质感，专业光影，高对比度" },
+  { value: "anime", label: "动漫风格", desc: "动漫风格，色彩鲜艳，表情生动，日式动画美学" },
+  { value: "realistic", label: "超写实", desc: "超写实照片风格，真实皮肤质感，自然光影，极致细节" },
+  { value: "noir", label: "黑色电影", desc: "黑色电影风格，黑白高反差，深邃阴影，神秘氛围" },
+  { value: "cyberpunk", label: "赛博朋克", desc: "赛博朋克风格，霓虹灯光，未来都市，高科技低生活" },
+  { value: "fantasy", label: "奇幻风格", desc: "奇幻风格，魔法氛围，空灵光线，梦幻意境" },
+  { value: "horror", label: "恐怖风格", desc: "恐怖风格，黑暗氛围，阴森光线，悬疑惊悚" },
+  { value: "comedy", label: "喜剧风格", desc: "喜剧风格，明亮色彩，欢快氛围，夸张表情" },
 ];
 
 // 画面比例选项
