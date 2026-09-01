@@ -12,21 +12,7 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-// 桌面端（Tauri）自动从本机 ~/.dualstudio/glm_key 读取智谱 GLM 文本后端 Key。
 async function bootstrap() {
-  try {
-    const tauri = window.__TAURI__;
-    if (tauri && tauri.core && tauri.core.invoke) {
-      try {
-        const zhipuKey = await tauri.core.invoke("read_zhipu_key");
-        if (zhipuKey && !localStorage.getItem("ZHIPU_API_KEY")) {
-          localStorage.setItem("ZHIPU_API_KEY", zhipuKey);
-        }
-      } catch (_) {}
-    }
-  } catch (e) {
-    // 非桌面端或读取失败：回退到手动填写，忽略
-  }
   createRoot(document.getElementById("root")).render(
     <ErrorBoundary>
       <App />

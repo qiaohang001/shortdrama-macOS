@@ -6,7 +6,6 @@ import { pickDownloadDir } from "./download.js";
  */
 export function SettingsDialog({ open, onClose, appName, showRag = false, features = [], theme, onThemeChange }) {
   const [agnesKey, setAgnesKey] = useState(localStorage.getItem("AGNES_API_KEY") || "");
-  const [zhipuKey, setZhipuKey] = useState(localStorage.getItem("ZHIPU_API_KEY") || "");
   const [ragKey, setRagKey] = useState(localStorage.getItem("SILICONFLOW_API_KEY") || "");
   const [downloadDir, setDownloadDir] = useState(localStorage.getItem("DOWNLOAD_DIR") || "");
   const [autosave, setAutosave] = useState(localStorage.getItem("AUTOSAVE_SEC") || "5");
@@ -65,7 +64,6 @@ export function SettingsDialog({ open, onClose, appName, showRag = false, featur
   if (!open) return null;
 
   const saveAgnes = () => { localStorage.setItem("AGNES_API_KEY", agnesKey.trim()); };
-  const saveZhipu = () => { localStorage.setItem("ZHIPU_API_KEY", zhipuKey.trim()); };
   const saveRag = () => { localStorage.setItem("SILICONFLOW_API_KEY", ragKey.trim()); };
   const chooseDir = async () => {
     const r = await pickDownloadDir();
@@ -145,11 +143,6 @@ export function SettingsDialog({ open, onClose, appName, showRag = false, featur
         </div>
 
         <Section title="AI 密钥设置">
-          <label style={label}>智谱 GLM API Key（文本 AI：续写 / 润色 / 大纲 / 拆书 / 书名）</label>
-          <input style={input} type="password" value={zhipuKey} placeholder="粘贴你的智谱 GLM API Key"
-            onChange={(e) => setZhipuKey(e.target.value)} />
-          <button style={btn} onClick={saveZhipu}>保存 GLM Key</button>
-          <p style={hint}>文本生成统一走智谱 GLM-4-Flash（免费、128K 上下文）。桌面端也可放在本机 ~/.dualstudio/glm_key 自动读取。</p>
           <label style={label}>Agnes API Key（图像 / 视频 AI：封面 / 分镜图 / 短片）</label>
           <input style={input} type="password" value={agnesKey} placeholder="粘贴你的 Agnes API Key"
             onChange={(e) => setAgnesKey(e.target.value)} />

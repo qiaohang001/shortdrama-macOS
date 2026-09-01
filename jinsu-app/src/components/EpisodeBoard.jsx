@@ -3,6 +3,7 @@ import { parseSourceToScript, pushHistory, repairAndParse, dramaModifier, downlo
 import { ImageLightbox } from "./ImageLightbox.jsx";
 import { VideoSizePicker } from "./VideoSizePicker.jsx";
 import { runDispatchJob, DispatchError, generateImage } from "../dispatch-jobs.js";
+import { DispatchGlmClient } from "@dual/glm-client";
 
 // 分场剧本：显示「第几集第几场」，每场可细化分镜（5-10 秒）。
 // 每个分镜包含景别、运镜、灯光、情绪、特效、中文生视频提示词。
@@ -46,7 +47,7 @@ export function EpisodeBoard({ project, update, log }) {
     });
   };
 
-  const client = () => new GlmClient();
+  const client = () => new DispatchGlmClient();
 
   const episodes = project?.episodes || [];
   const shots = project?.shots || [];

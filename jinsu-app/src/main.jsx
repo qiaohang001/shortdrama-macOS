@@ -14,13 +14,7 @@ async function bootstrap() {
           localStorage.setItem("AGNES_API_KEY", agnesKey);
         }
       } catch (_) {}
-      // 智谱 GLM 文本后端 Key（封面图/视频仍走 Agnes）
-      try {
-        const zhipuKey = await tauri.core.invoke("read_zhipu_key");
-        if (zhipuKey && !localStorage.getItem("ZHIPU_API_KEY")) {
-          localStorage.setItem("ZHIPU_API_KEY", zhipuKey);
-        }
-      } catch (_) {}
+
     }
   } catch (e) {
     // 非桌面端或读取失败：回退到手动填写，忽略

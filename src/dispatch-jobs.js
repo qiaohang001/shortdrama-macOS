@@ -183,7 +183,7 @@ export async function runDispatchJob({ type, payload, onProgress = () => {}, pol
  * 图像生成：调用后端 /api/image/generate，自动计费。
  * @param {Object} params
  * @param {string} params.prompt - 生图提示词
- * @param {string} [params.model] - "Qwen/Qwen-Image" | "ZhipuAI/Z-Image-Turbo"，默认 Qwen/Qwen-Image
+ * @param {string} [params.model] - "Qwen/Qwen-Image"，默认 Qwen/Qwen-Image
  * @param {string} [params.size]  - "1328x1328" | "1024x1024"，按 model 默认
  * @param {number} [params.n]     - 生成张数，默认 1
  * @returns {Promise<{image_url: string, credits_used: number}>}

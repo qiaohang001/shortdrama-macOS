@@ -5,13 +5,6 @@ use tauri::Manager;
 use base64::Engine;
 
 #[tauri::command]
-fn read_zhipu_key() -> Option<String> {
-    let home = std::env::var("USERPROFILE").unwrap_or_default();
-    let p = std::path::Path::new(&home).join(".dualstudio").join("glm_key");
-    std::fs::read_to_string(p).ok().map(|s| s.trim().to_string())
-}
-
-#[tauri::command]
 fn save_file(dir: String, filename: String, data: String) -> Result<String, String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&data)
@@ -750,7 +743,6 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
-            read_zhipu_key,
             save_file,
             save_shared_assets,
             export_intro_mp4,

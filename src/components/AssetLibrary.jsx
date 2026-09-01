@@ -20,7 +20,7 @@ const ASPECT_RATIO_OPTIONS = [
   { value: "4:3", label: "4:3 标准", size: "1152x864" },
   { value: "3:4", label: "3:4 竖版", size: "864x1152" },
 ];
-import { GlmClient } from "@dual/glm-client";
+import { DispatchGlmClient } from "@dual/glm-client";
 import { generateImage, api } from "../dispatch-jobs.js";
 import * as THREE from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
@@ -226,7 +226,7 @@ export function AssetLibrary({ project, update, log, onUseDub, onUseEdit }) {
 
 原文（前 12000 字）：
 ${text.slice(0, 12000)}`;
-      const client = new GlmClient();
+      const client = new DispatchGlmClient();
       const res = await client.chat(prompt, { maxTokens: 4000, temperature: 0.7 });
       let data = repairAndParse(res, "角色场景 JSON");
       if (Array.isArray(data) && data.length === 2 && Array.isArray(data[0]) && Array.isArray(data[1])) {
