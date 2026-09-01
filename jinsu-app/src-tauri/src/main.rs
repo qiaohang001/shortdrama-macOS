@@ -12,7 +12,6 @@ fn read_agnes_key() -> Option<String> {
     std::fs::read_to_string(p).ok().map(|s| s.trim().to_string())
 }
 
-/// 桌面端：从本机 ~/.dualstudio/glm_key 读取智谱 GLM 文本后端 Key，供前端自动注入。
 #[tauri::command]
 fn open_director3d(app: tauri::AppHandle) -> Result<(), String> {
     let mut cands: Vec<std::path::PathBuf> = Vec::new();
@@ -64,13 +63,6 @@ fn open_director3d(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
     Err("找不到 director3d-desktop.exe。请确保 3D 导演台 exe 与短剧 exe 同目录，或位于 D:/JINSU/。".into())
-}
-
-#[tauri::command]
-fn read_zhipu_key() -> Option<String> {
-    let home = std::env::var("USERPROFILE").unwrap_or_default();
-    let p = std::path::Path::new(&home).join(".dualstudio").join("glm_key");
-    std::fs::read_to_string(p).ok().map(|s| s.trim().to_string())
 }
 
 #[tauri::command]
@@ -422,7 +414,6 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             read_agnes_key,
-            read_zhipu_key,
             save_file,
             save_shared_assets,
             open_director3d,
