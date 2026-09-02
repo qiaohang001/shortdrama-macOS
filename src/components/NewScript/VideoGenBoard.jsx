@@ -12,11 +12,22 @@ const VIDEO_MODES = [
   { key: "t2v", label: "文生视频 (T2V)", desc: "纯文字描述生成，自由度最高" },
 ];
 
+// 各渠道支持的生成模式（万相不支持尾帧R2V，可灵不支持参考音频全能参考）
+const PROV_MODES = {
+  autodl: ["i2v", "r2v", "ia2v", "t2v"],
+  wan27: ["i2v", "ia2v", "t2v"],
+  kling: ["i2v", "r2v", "t2v"],
+};
+const getVideoModes = (provider) => {
+  const keys = PROV_MODES[provider] || PROV_MODES.autodl;
+  return VIDEO_MODES.filter(m => keys.includes(m.key));
+};
+
 // 视频生成渠道（provider）：AutoDL托管 / 百炼万相2.7 / 百炼可灵3.0
 const VIDEO_PROVIDERS = [
-  { key: "autodl", label: "标准 · AutoDL", desc: "MiniMax H3 托管，1-3积分/秒" },
-  { key: "wan27", label: "万相 2.7", desc: "wan2.7-r2v 参考生视频，4-8积分/秒" },
-  { key: "kling", label: "可灵 3.0", desc: "kling-v3-omni 高画质，5-9积分/秒" },
+  { key: "autodl", label: "标准生成", desc: "低配托管，1-3积分/秒" },
+  { key: "wan27", label: "高级生成", desc: "高画质参考生视频，4-8积分/秒" },
+  { key: "kling", label: "顶级生成", desc: "旗舰高动态画质，5-9积分/秒" },
 ];
 
 // 视频生成价格：从调度机全局价格配置获取
@@ -888,9 +899,9 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
                 setDuration(maxDur);
               }
             }}>
-            {VIDEO_MODES.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+            {getVideoModes(videoProvider).map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
           </select>
-          <select style={{ padding: "6px 10px", border: "1px solid #7A5CFF", borderRadius: 6, background: "rgba(122,92,255,0.12)", color: "var(--text)", fontSize: 12, fontWeight: 600 }}
+          <select style={{ padding: "6px 10px", border: "1px solid #7A5CFF", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12, fontWeight: 600 }}
             value={videoProvider} onChange={e => {
               const newProvider = e.target.value;
               setVideoProvider(newProvider);
@@ -898,6 +909,10 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
               // 万相/可灵不支持480P，自动校正分辨率
               if ((newProvider === "wan27" || newProvider === "kling") && resolution.includes("480")) {
                 setResolution("768p竖");
+              }
+              // 当前模式不被新渠道支持时，自动切到第一个可用模式
+              if (!getVideoModes(newProvider).find(m => m.key === selectedMode)) {
+                setSelectedMode(getVideoModes(newProvider)[0].key);
               }
             }}
             title="选择视频生成渠道（不同模型价格不同）">
