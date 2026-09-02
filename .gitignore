@@ -3,3 +3,5 @@ dist
 src-tauri/target
 *.log
 .DS_Store
+# patch 备份文件
+*.bak-*

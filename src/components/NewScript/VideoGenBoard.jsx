@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { downloadUrl, saveBlob } from "../../utils.js";
 import { runDispatchJob, api } from "../../dispatch-jobs.js";
 import { isLoggedIn, precheckCredits, getCreditBalance } from "../../utils/backend-api.js";
-import { getAppSetting } from "../../utils/app-settings.js";
+import { getAppSetting, saveAppSetting } from "../../utils/app-settings.js";
 import { calcVideoPrice } from "../../utils/pricing-utils.js";
 
 const VIDEO_MODES = [
@@ -12,9 +12,16 @@ const VIDEO_MODES = [
   { key: "t2v", label: "文生视频 (T2V)", desc: "纯文字描述生成，自由度最高" },
 ];
 
+// 视频生成渠道（provider）：AutoDL托管 / 百炼万相2.7 / 百炼可灵3.0
+const VIDEO_PROVIDERS = [
+  { key: "autodl", label: "标准 · AutoDL", desc: "MiniMax H3 托管，1-3积分/秒" },
+  { key: "wan27", label: "万相 2.7", desc: "wan2.7-r2v 参考生视频，4-8积分/秒" },
+  { key: "kling", label: "可灵 3.0", desc: "kling-v3-omni 高画质，5-9积分/秒" },
+];
+
 // 视频生成价格：从调度机全局价格配置获取
-function getVideoPricePerSec(mode, resolution) {
-  return calcVideoPrice(mode, resolution, 1);
+function getVideoPricePerSec(mode, resolution, provider) {
+  return calcVideoPrice(mode, resolution, 1, provider);
 }
 
 // I2V支持的分辨率（lightx2v_v5支持1080P和1:1）
@@ -40,11 +47,16 @@ const RESOLUTIONS_BASIC = [
   { key: "480p竖", label: "480P 竖屏（9:16）" },
 ];
 
-// 根据模式获取可用分辨率
-const getResolutions = (mode) => {
-  if (mode === "i2v") return RESOLUTIONS_I2V;
-  if (mode === "ia2v") return RESOLUTIONS_IA2V;
-  return RESOLUTIONS_BASIC;
+// 根据模式获取可用分辨率（万相/可灵渠道不支持480P，自动隐藏）
+const getResolutions = (mode, provider) => {
+  let list;
+  if (mode === "i2v") list = RESOLUTIONS_I2V;
+  else if (mode === "ia2v") list = RESOLUTIONS_IA2V;
+  else list = RESOLUTIONS_BASIC;
+  if (provider === "wan27" || provider === "kling") {
+    list = list.filter(r => !r.key.includes("480"));
+  }
+  return list;
 };
 
 // 根据模式获取可用时长（I2V/IA2V=1-10秒，R2V/T2V=1-15秒）
@@ -296,6 +308,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
   const [resolution, setResolution] = useState(() => getAppSetting("defaultResolution", "768p竖"));
   const [duration, setDuration] = useState(() => Number(getAppSetting("defaultDuration", 5)));
   const [selectedStyle, setSelectedStyle] = useState(() => getAppSetting("defaultVideoStyle", "cinematic"));
+  const [videoProvider, setVideoProvider] = useState(() => getAppSetting("defaultVideoProvider", "autodl"));
 
   const [lastFrameUrl, setLastFrameUrl] = useState("");
   const [firstFrameUrl, setFirstFrameUrl] = useState("");
@@ -486,7 +499,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
     }
     try {
       // 积分预校验：按模式+分辨率分别定价
-      const pricePerSec = getVideoPricePerSec(selectedMode, resolution);
+      const pricePerSec = getVideoPricePerSec(selectedMode, resolution, videoProvider);
       const needCredits = pricePerSec * duration;
       try {
         const precheck = await precheckCredits(needCredits, "video", `视频生成：${sh.title}`);
@@ -769,8 +782,9 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
         type: "video",
         payload: {
           workflow: currentWorkflowId,
-          model: "MiniMax-H3",
+          model: videoProvider === "wan27" ? "Wan2.7-r2v" : (videoProvider === "kling" ? "Kling-v3-omni" : "MiniMax-H3"),
           mode: selectedMode,
+          provider: videoProvider,
           ...workflowParams,
         },
         pollInterval: 5000,
@@ -836,7 +850,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
   };
 
   // 视频价格：按模式+分辨率分别定价
-  const pricePerSec = getVideoPricePerSec(selectedMode, resolution);
+  const pricePerSec = getVideoPricePerSec(selectedMode, resolution, videoProvider);
   const currentCredits = pricePerSec * duration;
   const showLastFrame = selectedMode === "r2v";
 
@@ -857,14 +871,14 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       )}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>🎥 视频生成 · MiniMax-H3</h2>
+        <h2 style={{ margin: 0, fontSize: 18 }}>🎥 视频生成 · {VIDEO_PROVIDERS.find(p => p.key === videoProvider)?.label || "标准"}</h2>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <select style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12 }}
             value={selectedMode} onChange={e => {
               const newMode = e.target.value;
               setSelectedMode(newMode);
               // 自动校正分辨率（如果当前分辨率在新模式下不可用）
-              const availableResolutions = getResolutions(newMode);
+              const availableResolutions = getResolutions(newMode, videoProvider);
               if (!availableResolutions.find(r => r.key === resolution)) {
                 setResolution("768p竖");
               }
@@ -876,9 +890,22 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
             }}>
             {VIDEO_MODES.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
           </select>
+          <select style={{ padding: "6px 10px", border: "1px solid #7A5CFF", borderRadius: 6, background: "rgba(122,92,255,0.12)", color: "var(--text)", fontSize: 12, fontWeight: 600 }}
+            value={videoProvider} onChange={e => {
+              const newProvider = e.target.value;
+              setVideoProvider(newProvider);
+              saveAppSetting("defaultVideoProvider", newProvider);
+              // 万相/可灵不支持480P，自动校正分辨率
+              if ((newProvider === "wan27" || newProvider === "kling") && resolution.includes("480")) {
+                setResolution("768p竖");
+              }
+            }}
+            title="选择视频生成渠道（不同模型价格不同）">
+            {VIDEO_PROVIDERS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
           <select style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12 }}
             value={resolution} onChange={e => setResolution(e.target.value)}>
-            {getResolutions(selectedMode).map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+            {getResolutions(selectedMode, videoProvider).map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
           </select>
           <select style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12 }}
             value={duration} onChange={e => setDuration(Number(e.target.value))}>
@@ -905,7 +932,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
           当前模式：{VIDEO_MODES.find(m => m.key === selectedMode)?.label}
         </div>
         <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-          {VIDEO_MODES.find(m => m.key === selectedMode)?.desc} · {resolution} {duration}秒 = {currentCredits} 积分（{pricePerSec}积分/秒）
+          {VIDEO_MODES.find(m => m.key === selectedMode)?.desc} · {VIDEO_PROVIDERS.find(p => p.key === videoProvider)?.desc} · {resolution} {duration}秒 = {currentCredits} 积分（{pricePerSec}积分/秒）
         </div>
       </div>
 

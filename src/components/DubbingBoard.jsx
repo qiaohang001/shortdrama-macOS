@@ -1283,19 +1283,6 @@ export function DubbingBoard({ project, update, log, incomingChunk = "", incomin
       alert('请先登录后再使用文字创建音色功能');
       return;
     }
-    // 积分预校验（文字创建音色5积分）
-    try {
-      const precheck = await precheckCredits(5, 'text', '文字创建音色');
-      if (!precheck.sufficient && precheck.sufficient !== undefined) {
-        log(`❌ 积分不足：需要5积分，当前余额${precheck.balance || 0}积分`);
-        alert(
-          `积分不足！文字创建音色需要5积分，当前余额${precheck.balance || 0}积分。请充值后再试。`,
-        );
-        return;
-      }
-    } catch (e) {
-      log(`⚠️ 积分预校验失败：${e.message}`);
-    }
     setCreatingVoice(true);
     log(`正在用文字创建音色：${voicePrompt.substring(0, 20)}...`);
     try {
@@ -1322,21 +1309,17 @@ export function DubbingBoard({ project, update, log, incomingChunk = "", incomin
       } catch (e) {
         log(`⚠️ 音色保存到云端失败：${e.message}`);
       }
-      // 积分扣减（文字创建音色5积分）
-      if (isLoggedIn()) {
-        try {
-                    log(`✅ 积分扣减成功：5积分`);
-          try {
-            const balanceData = await getCreditBalance();
-            if (window.onCreditUpdate)
-              window.onCreditUpdate(
-                balanceData.balance || balanceData.credits || 0,
-              );
-            if (window.refreshUserInfo) window.refreshUserInfo();
-          } catch (e) {}
-        } catch (e) {
-          log(`⚠️ 积分扣减失败：${e.message}`);
-        }
+      // 音色创建费用由后端成功后扣（60积分），此处仅刷新余额
+      try {
+        const balanceData = await getCreditBalance();
+        if (window.onCreditUpdate)
+          window.onCreditUpdate(
+            balanceData.balance || balanceData.credits || 0,
+          );
+        if (window.refreshUserInfo) window.refreshUserInfo();
+        log(`✅ 音色创建费用已由后端扣除（60积分），余额已刷新`);
+      } catch (e) {
+        log(`⚠️ 余额刷新失败：${e.message}`);
       }
       setShowVoiceDesigner(false);
       setVoicePrompt('');
@@ -2316,7 +2299,7 @@ export function DubbingBoard({ project, update, log, incomingChunk = "", incomin
               >
                 {generatingId === dlg.id
                   ? '生成中...'
-                  : `🎤 生成配音（${Math.max(1, Math.ceil(dlg.text.length / 3))}积分）`}
+                  : `🎤 生成配音（${ttsModel.includes('turbo') ? 1.5 : 2.5}积分）`}
               </button>
               {dlg.audioUrl && (
                 <>
@@ -2737,7 +2720,7 @@ export function DubbingBoard({ project, update, log, incomingChunk = "", incomin
                 fontWeight: 600,
               }}
             >
-              {creatingVoice ? '创建中...' : '🎵 创建音色（5积分）'}
+              {creatingVoice ? '创建中...' : '🎵 创建音色（60积分）'}
             </button>
 
             {customVoices.length > 0 && (

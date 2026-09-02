@@ -43,6 +43,18 @@ const DEFAULT_PRICING = {
   video_ia2v_480p: 2.0,
   video_ia2v_768p: 3.0,
   video_ia2v_1080p: 5.0,
+  // 视频三渠道价格表（按渠道+分辨率 积分/秒；/api/pricing 返回同结构）
+  video: {
+    autodl: { "480p": 1.0, "768p": 2.0, "1080p": 3.0 },
+    wan27:  { "480p": 4.0, "768p": 6.0, "1080p": 8.0 },
+    kling:  { "480p": 5.0, "768p": 7.0, "1080p": 9.0 },
+  },
+  // 视频渠道元数据（名称/描述）
+  video_providers: {
+    autodl: { name: "标准", desc: "MiniMax H3 · AutoDL 托管" },
+    wan27:  { name: "万相 2.7", desc: "wan2.7-r2v 参考生视频 · 首帧+角色+音色" },
+    kling:  { name: "可灵 3.0", desc: "kling-v3-omni 高画质 · 首帧+参考图" },
+  },
   // 3D生成
   threed_character_four_views: 8.0,
   threed_character_3d_model: 25.0,
@@ -106,9 +118,16 @@ export function calcTtsPrice(lineCount = 1, model = "hd") {
  * @param {number} duration - 时长（秒）
  * @returns {number} 价格（积分）
  */
-export function calcVideoPrice(mode, resolution, duration) {
+export function calcVideoPrice(mode, resolution, duration, provider = "autodl") {
   const pricing = getPricing();
   const resKey = resolution.includes("1080") ? "1080p" : (resolution.includes("480") ? "480p" : "768p");
+  // 优先：按渠道 pricing.video[provider][resKey]（/api/pricing 返回结构）
+  const videoTable = (pricing && pricing.video) || DEFAULT_PRICING.video;
+  const providerTable = (videoTable && videoTable[provider]) || (videoTable && videoTable.autodl);
+  if (providerTable && providerTable[resKey] != null) {
+    return providerTable[resKey] * duration;
+  }
+  // 兜底：video_{mode}_{resKey} 旧字段
   const priceKey = `video_${mode}_${resKey}`;
   const perSec = getPrice(priceKey, 2.0);
   return perSec * duration;
