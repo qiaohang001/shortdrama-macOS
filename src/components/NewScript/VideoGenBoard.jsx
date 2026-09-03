@@ -138,8 +138,14 @@ const extractLastFrameViaAPI = async (videoUrl, log) => {
       body: JSON.stringify({ video_url: videoUrl }),
     });
     if (result && result.image_url) {
-      if (log) log(`调度机提取尾帧成功：${result.image_url.substring(0, 80)}...`);
-      return result.image_url;
+      let frameUrl = result.image_url;
+      // 兼容调度机返回的相对路径（如 /static/frames/xxx.png），拼成完整URL
+      if (typeof frameUrl === "string" && frameUrl.startsWith("/")) {
+        const baseUrl = (typeof localStorage !== "undefined" && localStorage.getItem("DISPATCH_BASE_URL")) || "https://api.jinsuai.cn";
+        frameUrl = baseUrl + frameUrl;
+      }
+      if (log) log(`调度机提取尾帧成功：${frameUrl.substring(0, 80)}...`);
+      return frameUrl;
     }
     if (log) log("⚠️ 调度机提取尾帧返回空，将尝试前端提取");
     return null;
@@ -219,7 +225,7 @@ const uploadImageToServer = async (imageUrl, log) => {
   }
   
   try {
-    const imgType = imageUrl.startsWith("blob:") ? "blob" : imageUrl.startsWith("data:") ? "base64" : imageUrl.startsWith("http") ? "http-url" : "other";
+    const imgType = imageUrl.startsWith("blob:") ? "blob" : imageUrl.startsWith("data:") ? "base64" : (imageUrl.startsWith("http") || imageUrl.startsWith("/")) ? "http-url" : "other";
     if (log) log(`正在上传图片（${imgType}格式，长度${imageUrl.length}）：${imageUrl.substring(0, 80)}${imageUrl.length > 80 ? "..." : ""}`);
     
     const baseUrl = (typeof localStorage !== "undefined" && localStorage.getItem("DISPATCH_BASE_URL")) || "https://api.jinsuai.cn";
@@ -234,11 +240,15 @@ const uploadImageToServer = async (imageUrl, log) => {
       authHeaders["Authorization"] = "Bearer " + authToken;
     }
     
-    // 对于所有http/https URL，都传给调度机下载并保存
-    if (imageUrl.startsWith("http")) {
+    // 对于所有http/https或/开头的相对路径，都传给调度机下载并保存
+    if (imageUrl.startsWith("http") || imageUrl.startsWith("/")) {
+      let urlToDownload = imageUrl;
+      if (urlToDownload.startsWith("/")) {
+        urlToDownload = baseUrl + urlToDownload;
+      }
       if (log) log(`URL传调度机下载并保存：${uploadBaseUrl}/api/upload/image`);
       const formData = new FormData();
-      formData.append("url", imageUrl);
+      formData.append("url", urlToDownload);
       const res = await fetch(uploadBaseUrl + "/api/upload/image", {
         method: "POST",
         headers: authHeaders,
