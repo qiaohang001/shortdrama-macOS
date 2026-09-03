@@ -522,6 +522,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       // 积分预校验：按模式+分辨率分别定价
       const pricePerSec = getVideoPricePerSec(selectedMode, resolution, videoProvider);
       const needCredits = pricePerSec * duration;
+      log(`正在校验积分（需要${needCredits}积分）…`);
       try {
         const precheck = await precheckCredits(needCredits, "video", `视频生成：${sh.title}`);
         if (!precheck.sufficient && precheck.sufficient !== undefined) {

@@ -191,6 +191,7 @@ export async function precheckCredits(amount, type = "video", description = "") 
   const r = await request("/api/jobs/precheck", {
     method: "POST",
     body: JSON.stringify({ type, params: {} }),
+    timeout: 15000,
   });
   const balance = Number(r?.balance ?? 0) || 0;
   pushBalance(balance);
