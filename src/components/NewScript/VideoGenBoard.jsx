@@ -15,8 +15,8 @@ const VIDEO_MODES = [
 // 各渠道支持的生成模式（万相不支持尾帧R2V，可灵不支持参考音频全能参考）
 const PROV_MODES = {
   autodl: ["i2v", "r2v", "ia2v", "t2v"],
-  wan27: ["i2v", "ia2v", "t2v"],
-  kling: ["i2v", "r2v", "t2v"],
+  wan27: ["i2v"],
+  kling: ["i2v"],
 };
 const getVideoModes = (provider) => {
   const keys = PROV_MODES[provider] || PROV_MODES.autodl;
@@ -606,7 +606,45 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
         workflowParams.seed = seed;
         log(`随机种子：${seed}`);
 
-        log(`参考图：人物${charCount}张（ref_image_0-ref_image_${charCount - 1}），不使用首帧`);
+        if (videoProvider === "wan27" || videoProvider === "kling") {
+          log(`参考图：人物${charCount}张（ref_image_0-ref_image_${charCount - 1}），首帧来源见下方设置`);
+          // 参考首帧+人物图模式：获取首帧（本分镜分镜图 / 上个视频尾帧 / 手动上传）
+          let resolvedFirstFrame = null;
+          let firstFrameDesc = "";
+          if (firstFrameSource === "shot") {
+            resolvedFirstFrame = sh.imageUrl;
+            firstFrameDesc = `本分镜「${sh.title}」分镜图`;
+          } else if (firstFrameSource === "prev_video") {
+            const prevShot = getPrevShot(sh);
+            if (prevShot && prevShot.videoUrl) {
+              log(`找到上一镜「${prevShot.title}」视频，正在提取尾帧作为首帧…`);
+              resolvedFirstFrame = await extractLastFrameViaAPI(prevShot.videoUrl, log);
+              if (!resolvedFirstFrame) {
+                log("调度机提取失败，尝试前端提取…");
+                const firstFrame = await extractLastFrame(prevShot.videoUrl);
+                if (firstFrame) resolvedFirstFrame = await uploadImageToServer(firstFrame, log);
+              }
+              firstFrameDesc = `上一镜「${prevShot.title}」视频尾帧`;
+            } else {
+              throw new Error("首帧来源选择了「上个视频尾帧」，但上一镜没有生成视频。请先生成上一镜视频，或选择其他首帧来源。");
+            }
+          } else if (firstFrameSource === "custom") {
+            resolvedFirstFrame = firstFrameUrl;
+            firstFrameDesc = "用户手动上传";
+          }
+          if (!resolvedFirstFrame) {
+            throw new Error(`首帧获取失败（来源：${firstFrameDesc}）。请检查图片是否有效，或选择其他首帧来源。`);
+          }
+          log(`首帧：${firstFrameDesc}`);
+          const firstPublicUrl = await uploadImageToServer(resolvedFirstFrame, log);
+          if (!firstPublicUrl) {
+            throw new Error("首帧上传失败，请检查图片URL或重新上传。");
+          }
+          workflowParams.first_frame = firstPublicUrl;
+          log(`首帧上传成功 ✓`);
+        } else {
+          log(`参考图：人物${charCount}张（ref_image_0-ref_image_${charCount - 1}），不使用首帧`);
+        }
       } else if (selectedMode === "r2v") {
         // 首尾帧（minimax_h3_lightx2v）：首帧和尾帧都是必填，各有三种来源选择
         const prevShot = getPrevShot(sh);
@@ -863,6 +901,8 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
   // 视频价格：按模式+分辨率分别定价
   const pricePerSec = getVideoPricePerSec(selectedMode, resolution, videoProvider);
   const currentCredits = pricePerSec * duration;
+  const isPremProvider = videoProvider === "wan27" || videoProvider === "kling";
+  const showFirstFramePanel = selectedMode === "r2v" || (isPremProvider && selectedMode === "i2v");
   const showLastFrame = selectedMode === "r2v";
 
   return (
@@ -899,7 +939,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
                 setDuration(maxDur);
               }
             }}>
-            {getVideoModes(videoProvider).map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+            {getVideoModes(videoProvider).map(m => <option key={m.key} value={m.key}>{isPremProvider && m.key === "i2v" ? "参考首帧+人物图" : m.label}</option>)}
           </select>
           <select style={{ padding: "6px 10px", border: "1px solid #7A5CFF", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12, fontWeight: 600 }}
             value={videoProvider} onChange={e => {
@@ -944,18 +984,18 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       {/* 模式说明 */}
       <div style={{ marginBottom: 12, padding: "10px 14px", border: "1px solid rgba(122,92,255,0.3)", borderRadius: 8, background: "rgba(122,92,255,0.1)" }}>
         <div style={{ fontSize: 12, color: "#7A5CFF", fontWeight: 600, marginBottom: 4 }}>
-          当前模式：{VIDEO_MODES.find(m => m.key === selectedMode)?.label}
+          当前模式：{isPremProvider && selectedMode === "i2v" ? "参考首帧+人物图" : (VIDEO_MODES.find(m => m.key === selectedMode)?.label)}
         </div>
         <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-          {VIDEO_MODES.find(m => m.key === selectedMode)?.desc} · {VIDEO_PROVIDERS.find(p => p.key === videoProvider)?.desc} · {resolution} {duration}秒 = {currentCredits} 积分（{pricePerSec}积分/秒）
+          {isPremProvider && selectedMode === "i2v" ? "首帧+人物图参考生成，人物外貌一致，画面起止可控" : (VIDEO_MODES.find(m => m.key === selectedMode)?.desc)} · {VIDEO_PROVIDERS.find(p => p.key === videoProvider)?.desc} · {resolution} {duration}秒 = {currentCredits} 积分（{pricePerSec}积分/秒）
         </div>
       </div>
 
-      {/* R2V首尾帧设置 */}
-      {showLastFrame && (
+      {/* R2V首尾帧设置 / 高级·顶级参考首帧设置 */}
+      {showFirstFramePanel && (
         <div style={{ marginBottom: 16, padding: 12, border: "1px solid var(--border)", borderRadius: 8, background: "var(--panel-2)" }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>🖼️ 首尾帧设置（首帧和尾帧均为必填，各有三种来源可选）</span>
+            <span>🖼️ {selectedMode === "r2v" ? "首尾帧设置（首帧和尾帧均为必填，各有三种来源可选）" : "参考首帧设置（首帧来源可选，人物图自动使用已生成角色）"}</span>
             <span style={{ fontSize: 11, color: "#7A5CFF", fontWeight: 500 }}>
               当前分镜：{shots.find(s => s.id === selectedShotId)?.title || "请点击下方分镜卡片选择"}
             </span>
@@ -1028,7 +1068,8 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
             </div>
           </div>
 
-          {/* 尾帧设置（必填） */}
+          {/* 尾帧设置（必填，仅R2V模式） */}
+          {showLastFrame && (
           <div style={{ padding: 10, border: "1px solid rgba(16,185,129,0.3)", borderRadius: 6, background: "rgba(16,185,129,0.05)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <span style={{ fontSize: 11, fontWeight: 600, color: "#10b981" }}>
@@ -1094,6 +1135,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
               </div>
             </div>
           </div>
+          )}
         </div>
       )}
 
@@ -1249,10 +1291,17 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       {selectedMode === "i2v" && (
         <div style={{ marginBottom: 16, padding: "10px 14px", border: "1px solid rgba(16,185,129,0.3)", borderRadius: 8, background: "rgba(16,185,129,0.08)" }}>
           <div style={{ fontSize: 11, color: "#10b981", lineHeight: 1.6 }}>
-            ✓ i2v模式（minimax_h3_lightx2v_v5）：<br/>
-            &nbsp;&nbsp;1. 人物参考图 = 人物管理中已生成的角色图（保证人物一致，ref_image_0必填）<br/>
-            &nbsp;&nbsp;2. 支持1080P和1:1方形分辨率，最多9张参考图，时长1-10秒<br/>
-            &nbsp;&nbsp;3. 不使用首帧（纯人物参考图生成）
+            {isPremProvider ? (
+              <>✓ 参考首帧+人物图模式：<br/>
+                &nbsp;&nbsp;1. 人物图 = 已生成的角色图（保证人物一致）<br/>
+                &nbsp;&nbsp;2. 首帧来源可选：本分镜分镜图 / 上个视频尾帧 / 手动上传<br/>
+                &nbsp;&nbsp;3. 支持1080P/1:1分辨率，时长1-10秒</>
+            ) : (
+              <>✓ i2v模式（minimax_h3_lightx2v_v5）：<br/>
+                &nbsp;&nbsp;1. 人物参考图 = 人物管理中已生成的角色图（保证人物一致，ref_image_0必填）<br/>
+                &nbsp;&nbsp;2. 支持1080P和1:1方形分辨率，最多9张参考图，时长1-10秒<br/>
+                &nbsp;&nbsp;3. 不使用首帧（纯人物参考图生成）</>
+            )}
           </div>
         </div>
       )}

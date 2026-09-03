@@ -13,7 +13,13 @@ window.addEventListener("keydown", (e) => {
 });
 
 async function bootstrap() {
-  createRoot(document.getElementById("root")).render(
+  // JINSU-0903: 防御 root 挂载点缺失导致的空白窗口
+  const mount = document.getElementById("root");
+  if (!mount) {
+    document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#fff;font-family:sans-serif;">初始化失败，请重启应用</div>';
+    return;
+  }
+  createRoot(mount).render(
     <ErrorBoundary>
       <App />
     </ErrorBoundary>
