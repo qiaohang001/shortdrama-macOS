@@ -670,6 +670,8 @@ ${refineTpl.guide}
     setAnalyzingScenes(true);
     log("正在分析剧本场景...");
     try {
+      // 场景构图描述跟随用户画幅选择
+      const sceneCompDesc = resolution.includes("竖") ? "竖屏9:16竖向构图，画面纵向纵深，主体居中或黄金分割位，留出上下层次" : (resolution.includes("方") || resolution.includes("1:1")) ? "方形1:1构图，主体居中，四周留白层次" : "横幅16:9横向构图，画面开阔，主体居中或黄金分割位，留出天空与地面层次";
       const shotTexts = allShots.filter(Boolean).map(s =>
         `- ${s.title || "未命名"}｜${s.sceneType || "未知"}\n  描述：${s.sceneDesc || "无"}${s.dialogue ? `\n  台词：${s.dialogue}` : ""}`
       ).join("\n");
@@ -680,7 +682,7 @@ ${refineTpl.guide}
 
 严格要求：
 - 【重要·纯场景空镜】场景提示词必须是空无一人的环境空镜：严禁出现任何人、人群、人潮、人影、背影、半身像、脸、手、脚等任何人体或身体部位；严禁兵器被人握持、手持道具等动作描写；"万头攒动/人潮涌动"等一律转化为空旷的广场、台阶、街道等无人环境
-- 【构图】横幅16:9横向构图，画面开阔，主体居中或黄金分割位，留出天空与地面层次
+- 【构图】${sceneCompDesc}
 - 合并相同/相似场景（"小巷"与"深夜小巷"算同一个）
 - 按出现频率排序，最多12个场景
 - 只输出JSON数组，不要任何其他文字或markdown代码块，格式：
@@ -742,12 +744,14 @@ ${shotTexts}`;
     setRefiningSceneId(scene.id);
     log(`正在优化场景「${scene.name}」提示词...`);
     try {
+      // 场景构图描述跟随用户画幅选择
+      const sceneCompDesc = resolution.includes("竖") ? "竖屏9:16竖向构图，画面纵向纵深，主体居中或黄金分割位，留出上下层次" : (resolution.includes("方") || resolution.includes("1:1")) ? "方形1:1构图，主体居中，四周留白层次" : "横幅16:9横向构图，画面开阔，主体居中或黄金分割位，留出天空与地面层次";
       // 输入净化：剥离“人物：xxx”与△动作行，只留环境线索喂给LLM
       const envDesc = (scene.desc || "").replace(/人物：[^\n。；]*/g, "").replace(/△[^\n]*/g, "").replace(/【[^】]*】/g, "").trim() || scene.name;
       const envPrompt = (scene.prompt || "").replace(/人物：[^\n。；]*/g, "").replace(/△[^\n]*/g, "").replace(/【[^】]*】/g, "").trim() || "";
       const prompt = `你是专业的AI生图提示词工程师。请优化以下场景的生图提示词，使其更精致、可直接用于AI生图。
 要求：1. 60-120字；2. 包含：环境主体与空间结构、时代风格、光影色调、氛围情绪、关键道具；3. 只输出提示词本身，不要解释、不要markdown代码块。
-【重要·纯场景空镜】这是场景概念图，必须是空无一人的环境空镜：严禁出现任何人、人群、人潮、人影、背影、脸、手、脚等任何人体或身体部位；严禁"铁手套握飞针"等任何手持兵器/道具的动作描写；"万头攒动/人潮涌动"等一律改为空旷的广场、台阶、街道等无人环境；忽略下面描述中的全部人物、动作、台词细节，只提炼环境本身：空间结构、建筑陈设、自然景观、天气、无人场景道具、光影色调、氛围情绪。【构图】横幅16:9横向构图，画面开阔，主体居中或黄金分割位，留出天空与地面层次。
+【重要·纯场景空镜】这是场景概念图，必须是空无一人的环境空镜：严禁出现任何人、人群、人潮、人影、背影、脸、手、脚等任何人体或身体部位；严禁"铁手套握飞针"等任何手持兵器/道具的动作描写；"万头攒动/人潮涌动"等一律改为空旷的广场、台阶、街道等无人环境；忽略下面描述中的全部人物、动作、台词细节，只提炼环境本身：空间结构、建筑陈设、自然景观、天气、无人场景道具、光影色调、氛围情绪。【构图】${sceneCompDesc}。
 
 场景名称：${scene.name}
 环境描述：${envDesc}
@@ -787,7 +791,9 @@ ${shotTexts}`;
     log(`正在生成场景「${scene.name}」图片...`);
     try {
       const prompt = scene.prompt || scene.desc || scene.name;
-      const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1664x928", n: 1 });
+      // 场景图比例跟随用户选择的画幅（竖9:16 / 方1:1 / 横16:9）
+      const sceneSize = resolution.includes("竖") ? "928x1664" : (resolution.includes("方") || resolution.includes("1:1")) ? "1328x1328" : "1664x928";
+      const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: sceneSize, n: 1 });
       const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
       if (!imageUrl) throw new Error("未返回图片地址");
       updateScenes(scenes.map(s => s.id === scene.id ? { ...s, image: imageUrl } : s));

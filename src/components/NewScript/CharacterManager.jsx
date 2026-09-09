@@ -60,6 +60,18 @@ export function buildCharacterPrompt(char, styleValue) {
   return `${buildCharacterBasePrompt(char)}${styleObj.desc}。`;
 }
 
+// 锁定图提示词（单张正面全身，用于视频生成时的人物锁定；特征最清晰，不用多视图布局）
+export function buildCharacterLockPrompt(char) {
+  const appearance = char.appearance || "";
+  const personality = char.personality || "";
+  const role = char.role || "";
+  const existing = (char.promptCn || "").trim();
+  // 复用细化提示词里的外貌描述部分（"画面布局"之前），保留完整外貌/服饰/配饰细节
+  const descPart = (existing.split("画面布局")[0] || "").trim() || `${char.name}，${role}，${appearance}，性格气质：${personality}`.replace(/[，,]+$/, "");
+  const typeLayer = getTypeLayer(appearance, role, char.name);
+  return `${descPart}。画面：该角色正面全身站姿设定图，全身完整入镜（头顶至脚底），自然站立，双臂自然下垂，双脚与肩同宽，面部正视镜头，表情沉稳。纯白色无背景，无阴影，无环境元素，纯净角色设定图。${QUALITY_LAYER}，${typeLayer}。注意：此角色为「${char.name}」，请严格保持其外貌、服装与配饰的完整性和辨识度，不要改变或简化。负面提示：${NEGATIVE_PROMPT}`;
+}
+
 // 生成图片时向已有提示词注入风格描述（插在"负面提示"之前；已含则不重复）
 export function injectStyleDesc(p, styleDesc) {
   if (!styleDesc) return p;
@@ -313,8 +325,8 @@ ${content.slice(0, 5000)}
     log(`正在为「${char.name}」生成人物参考图...`);
     try {
       const styleObj = STYLE_OPTIONS.find(s => s.value === selectedStyle) || STYLE_OPTIONS[0];
-      // 基础提示词 = 用户已有提示词（分析/细化版，不含风格）；没有则用通用三层结构
-      const basePrompt = (char.promptCn && char.promptCn.trim().length > 0) ? char.promptCn.trim() : buildCharacterBasePrompt(char);
+      // 锁定图 = 单张正面全身（复用细化提示词的外貌描述 + 正面全身布局），视频生成时用这张做人物锁定
+      const basePrompt = buildCharacterLockPrompt(char);
       // 生成时注入所选风格描述
       const prompt = injectStyleDesc(basePrompt, styleObj.desc);
       const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1328x1328", n: 1 });
@@ -341,10 +353,10 @@ ${content.slice(0, 5000)}
         const newImageAsset = {
           id: "a_char_image_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8),
           type: "image",
-          title: `${char.name}角色参考图（${styleObj.label}，${new Date().toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}）`,
+          title: `${char.name}角色锁定图（${styleObj.label}，${new Date().toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}）`,
           url: imageUrl,
           status: "ready",
-          tags: ["角色生图", styleObj.label, char.name],
+          tags: ["角色锁定图", "角色生图", styleObj.label, char.name],
           favorite: false,
           characterId: char.id,
           characterName: char.name,
@@ -370,6 +382,80 @@ ${content.slice(0, 5000)}
           log(`⚠️ 积分扣减失败：${e.message}`);
         }
       }
+    } catch (err) {
+      log(`生成失败：${err.message}`);
+    } finally {
+      setGeneratingCharIds(prev => { const next = {...prev}; delete next[char.id]; return next; });
+    }
+  };
+
+  // 生成三视图+面部特写展示图（可选，另计费，用于人物卡/素材展示；不参与视频锁定）
+  const generateCharacterSheet = async (char) => {
+    if (generatingCharIds[char.id]) return;
+    if (!isLoggedIn()) { alert("请先登录后再使用人物生图功能"); return; }
+    const sheetPrice = getPrice("image_generate", 3.0);
+    try {
+      const precheck = await precheckCredits(sheetPrice, "image", `三视图展示图：${char.name}`);
+      if (!precheck.sufficient && precheck.sufficient !== undefined) {
+        log(`❌ 积分不足：需要${sheetPrice}积分，当前余额${precheck.balance || 0}积分`);
+        alert(`积分不足！生成三视图展示图需要${sheetPrice}积分，当前余额${precheck.balance || 0}积分。请充值后再试。`);
+        return;
+      }
+    } catch (e) {
+      log(`⚠️ 积分预校验失败：${e.message}`);
+    }
+    setGeneratingCharIds(prev => ({ ...prev, [char.id]: true }));
+    log(`正在为「${char.name}」生成三视图展示图...`);
+    try {
+      const styleObj = STYLE_OPTIONS.find(s => s.value === selectedStyle) || STYLE_OPTIONS[0];
+      // 三视图展示图 = 四宫格布局（正/侧/背全身 + 面部特写），供人物卡/素材展示
+      const basePrompt = (char.promptCn && char.promptCn.trim().length > 0) ? char.promptCn.trim() : buildCharacterBasePrompt(char);
+      const prompt = injectStyleDesc(basePrompt, styleObj.desc);
+      const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1328x1328", n: 1 });
+      const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
+      if (!imageUrl) throw new Error("未返回图片地址");
+      update(prev => {
+        const allChars = prev.materials?.characters || [];
+        const newChars = allChars.map(x => {
+          const matched = (x.id && char.id) ? (x.id === char.id) : (x.name === char.name);
+          if (matched) return { ...x, sheetImage: imageUrl };
+          return x;
+        });
+        return { materials: { ...prev.materials, characters: newChars } };
+      });
+      try {
+        const currentAssets = project?.assets || [];
+        const newImageAsset = {
+          id: "a_char_sheet_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8),
+          type: "image",
+          title: `${char.name}三视图展示图（${styleObj.label}，${new Date().toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}）`,
+          url: imageUrl,
+          status: "ready",
+          tags: ["三视图展示图", "角色生图", styleObj.label, char.name],
+          favorite: false,
+          characterId: char.id,
+          characterName: char.name,
+          style: selectedStyle,
+          createdAt: Date.now()
+        };
+        update({ assets: [newImageAsset, ...currentAssets] });
+        log(`✅ 三视图展示图已存入素材库：${newImageAsset.title}`);
+      } catch (e) {
+        log(`⚠️ 三视图展示图存入素材库失败：${e.message}`);
+      }
+      if (isLoggedIn()) {
+        try {
+          log(`✅ 积分扣减成功：${sheetPrice}积分`);
+          try {
+            const balanceData = await getCreditBalance();
+            if (window.onCreditUpdate) window.onCreditUpdate(balanceData.balance || balanceData.credits || 0);
+            if (window.refreshUserInfo) window.refreshUserInfo();
+          } catch (e) {}
+        } catch (e) {
+          log(`⚠️ 积分扣减失败：${e.message}`);
+        }
+      }
+      log(`✅ 「${char.name}」三视图展示图生成成功`);
     } catch (err) {
       log(`生成失败：${err.message}`);
     } finally {
@@ -419,8 +505,16 @@ ${content.slice(0, 5000)}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
         {characters.map(c => (
           <div key={c.id} style={{ border: "1px solid var(--border)", borderRadius: 12, padding: 12, background: "var(--panel-2)" }}>
-            <div style={{ width: "100%", height: 160, background: "var(--input-bg)", borderRadius: 8, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 48 }}>
+            <div style={{ width: "100%", height: 160, background: "var(--input-bg)", borderRadius: 8, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 48, position: "relative" }}>
               {c.image ? <img src={c.image} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 8, cursor: "zoom-in" }} onClick={() => setPreviewImage(c.image)} /> : "👤"}
+              {c.sheetImage && (
+                <button
+                  style={{ position: "absolute", right: 4, top: 4, padding: "2px 7px", fontSize: 10, border: "1px solid rgba(255,255,255,0.4)", borderRadius: 4, background: "rgba(0,0,0,0.6)", color: "#fff", cursor: "pointer", zIndex: 2 }}
+                  onClick={(e) => { e.stopPropagation(); setPreviewImage(c.sheetImage); }}
+                >
+                  🖼 三视图
+                </button>
+              )}
             </div>
             <div style={{ fontWeight: 600 }}>{c.name}</div>
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>{c.role || "未设定"}</div>
@@ -440,8 +534,17 @@ ${content.slice(0, 5000)}
                 style={{ flex: 1, minWidth: "45%", padding: "4px 0", border: generatingCharIds[c.id] ? "1px solid #f59e0b" : "1px solid #7A5CFF", borderRadius: 4, background: generatingCharIds[c.id] ? "rgba(245,158,11,0.15)" : "rgba(122,92,255,0.15)", color: generatingCharIds[c.id] ? "#f59e0b" : "#7A5CFF", fontSize: 11, cursor: generatingCharIds[c.id] ? "wait" : "pointer" }}
                 onClick={() => generateCharacterImage(c)}
                 disabled={generatingCharIds[c.id]}
+                title="生成正面全身锁定图，用于视频生成时锁定人物"
               >
-                {generatingCharIds[c.id] ? "⏳ 生成中..." : `🤖 AI生成（${getPrice("image_generate", 3.0)}积分）`}
+                {generatingCharIds[c.id] ? "⏳ 生成中..." : `🤖 锁定图（${getPrice("image_generate", 3.0)}积分）`}
+              </button>
+              <button
+                style={{ flex: 1, minWidth: "45%", padding: "4px 0", border: "1px solid var(--border)", borderRadius: 4, background: "transparent", color: "var(--text)", fontSize: 11, cursor: generatingCharIds[c.id] ? "wait" : "pointer" }}
+                onClick={() => generateCharacterSheet(c)}
+                disabled={generatingCharIds[c.id]}
+                title="生成三视图+面部特写展示图（可选，另计费，用于人物卡展示）"
+              >
+                {generatingCharIds[c.id] ? "⏳ 生成中..." : `🖼 三视图（${getPrice("image_generate", 3.0)}积分）`}
               </button>
               <button
                 style={{ flex: 1, minWidth: "45%", padding: "4px 0", border: "1px solid var(--border)", borderRadius: 4, background: "transparent", color: "var(--text)", fontSize: 11, cursor: "pointer" }}
