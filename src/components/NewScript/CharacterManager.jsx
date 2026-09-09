@@ -69,7 +69,7 @@ export function buildCharacterLockPrompt(char) {
   // 复用细化提示词里的外貌描述部分（"画面布局"之前），保留完整外貌/服饰/配饰细节
   const descPart = (existing.split("画面布局")[0] || "").trim() || `${char.name}，${role}，${appearance}，性格气质：${personality}`.replace(/[，,]+$/, "");
   const typeLayer = getTypeLayer(appearance, role, char.name);
-  return `${descPart}。画面：该角色正面全身站姿设定图，全身完整入镜（头顶至脚底），自然站立，双臂自然下垂，双脚与肩同宽，面部正视镜头，表情沉稳。纯白色无背景，无阴影，无环境元素，纯净角色设定图。${QUALITY_LAYER}，${typeLayer}。注意：此角色为「${char.name}」，请严格保持其外貌、服装与配饰的完整性和辨识度，不要改变或简化。负面提示：${NEGATIVE_PROMPT}`;
+  return `${descPart}。画面：单人正面全身站姿设定图，画面中仅此一个角色（严禁出现第二个人物、严禁其他视角、严禁拼图、严禁镜像倒影），全身完整入镜（头顶至脚底），自然站立，双臂自然下垂，双脚与肩同宽，面部正视镜头，表情沉稳。纯白色无背景，无阴影，无环境元素，纯净角色设定图。${QUALITY_LAYER}，${typeLayer}。注意：此角色为「${char.name}」，请严格保持其外貌、服装与配饰的完整性和辨识度，不要改变或简化。负面提示：双人，多个人物，第二个人物，多视角，拼图，镜像，倒影，剪影，${NEGATIVE_PROMPT}`;
 }
 
 // 生成图片时向已有提示词注入风格描述（插在"负面提示"之前；已含则不重复）
@@ -277,7 +277,7 @@ ${content.slice(0, 5000)}
 当前提示词：${current}`;
       const res = await api("/api/llm/chat", {
         method: "POST",
-        body: JSON.stringify({ messages: [{ role: "user", content: prompt }], max_tokens: 512 }),
+        body: JSON.stringify({ messages: [{ role: "user", content: prompt }], max_tokens: 8192 }),
       });
       const text = (res.text || "").trim();
       if (!text) throw new Error("LLM未返回内容");

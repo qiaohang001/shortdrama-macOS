@@ -82,7 +82,12 @@ const getResolutions = (mode, provider) => {
 };
 
 // 根据模式获取可用时长（I2V/S2V/IA2V=1-10秒，R2V/T2V=1-15秒；高级生成MiniMax H3的I2V支持30/60秒长视频分段续接）
-const getDurations = (mode, provider) => {
+const getDurations = (mode, provider, resolution) => {
+  const is1080 = (resolution || "").includes("1080");
+  // 1080p 只支持 5 秒以内（实测 1080p 每步约 180s，超过 5 秒耗时不可接受）
+  if (provider === "wan22" && is1080) {
+    return DURATIONS.filter(d => d.key <= 5);
+  }
   let list = DURATIONS.filter(d => d.key <= (mode === "i2v" || mode === "ia2v" || mode === "s2v" ? 10 : 15));
   if (provider === "wan22" && mode === "i2v") {
     list = list.concat([
@@ -566,7 +571,7 @@ ${refineTpl.guide}
         method: "POST",
         body: JSON.stringify({
           messages: [{ role: "user", content: prompt }],
-          max_tokens: 1024,
+          max_tokens: 8192,
         })
       });
       const refinedText = (res.text || "").trim();
@@ -692,7 +697,7 @@ ${refineTpl.guide}
 ${shotTexts}`;
       const res = await api("/api/llm/chat", {
         method: "POST",
-        body: JSON.stringify({ messages: [{ role: "user", content: prompt }], max_tokens: 2048 }),
+        body: JSON.stringify({ messages: [{ role: "user", content: prompt }], max_tokens: 16384 }),
       });
       const arr = extractJsonArray(res.text);
       if (!arr || !Array.isArray(arr) || arr.length === 0) throw new Error("LLM返回格式无法解析");
@@ -758,7 +763,7 @@ ${shotTexts}`;
 当前提示词：${envPrompt || "无"}`;
       const res = await api("/api/llm/chat", {
         method: "POST",
-        body: JSON.stringify({ messages: [{ role: "user", content: prompt }], max_tokens: 512 }),
+        body: JSON.stringify({ messages: [{ role: "user", content: prompt }], max_tokens: 8192 }),
       });
       const text = (res.text || "").trim();
       if (!text) throw new Error("LLM未返回内容");
@@ -1619,6 +1624,10 @@ ${shotTexts}`;
               if (duration >= 30 && !(newProvider === "wan22" && nextMode === "i2v")) {
                 setDuration(Math.min(duration, getMaxDuration(nextMode)));
               }
+              // 1080p 只支持 5 秒以内：切到高级生成且当前为 1080p 时限制时长
+              if (newProvider === "wan22" && (resolution || "").includes("1080") && duration > 5) {
+                setDuration(5);
+              }
             }}
             title="选择视频生成渠道（不同模型价格不同）">
             {VIDEO_PROVIDERS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
@@ -1633,12 +1642,20 @@ ${shotTexts}`;
             </button>
           )}
           <select style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12 }}
-            value={resolution} onChange={e => setResolution(e.target.value)}>
+            value={resolution} onChange={e => {
+              const v = e.target.value;
+              setResolution(v);
+              // 1080p 只支持 5 秒以内：切到 1080p 且当前时长超 5 秒时自动回到 5 秒
+              if (videoProvider === "wan22" && v.includes("1080") && duration > 5) {
+                setDuration(5);
+                log(`⚠️ 1080p 仅支持 5 秒以内视频，已自动调整时长为 5 秒`);
+              }
+            }}>
             {getResolutions(selectedMode, videoProvider).map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
           </select>
           <select style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12 }}
             value={duration} onChange={e => setDuration(Number(e.target.value))}>
-            {getDurations(selectedMode, videoProvider).map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
+            {getDurations(selectedMode, videoProvider, resolution).map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
           </select>
           <select style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12 }}
             value={selectedStyle} onChange={e => setSelectedStyle(e.target.value)}
