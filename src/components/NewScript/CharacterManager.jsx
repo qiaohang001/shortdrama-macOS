@@ -67,7 +67,14 @@ export function buildCharacterLockPrompt(char) {
   const role = char.role || "";
   const existing = (char.promptCn || "").trim();
   // 复用细化提示词里的外貌描述部分（"画面布局"之前），保留完整外貌/服饰/配饰细节
-  const descPart = (existing.split("画面布局")[0] || "").trim() || `${char.name}，${role}，${appearance}，性格气质：${personality}`.replace(/[，,]+$/, "");
+  const descPart = (existing.split("画面布局")[0] || "")
+    .trim()
+    .replace(/^角色设定三视图加面部特写[，,、]?\s*/, "")
+    .replace(/^角色设定图[，,、]?\s*/, "")
+    .replace(/^三视图加面部特写[，,、]?\s*/, "")
+    .split("画面：")[0]
+    .split("画面:")[0]
+    .trim() || `${char.name}，${role}，${appearance}，性格气质：${personality}`.replace(/[，,]+$/, "");
   const typeLayer = getTypeLayer(appearance, role, char.name);
   return `${descPart}。画面：一张全身照片，镜头正对人物正面，画面中只有一个人物（严禁第二个人物、严禁多视图拼图、严禁镜像倒影），全身完整入镜（头顶至脚底），自然站立，双臂自然下垂，双脚与肩同宽，面部正视镜头，表情沉稳。背景为纯白色摄影棚背景，无任何环境元素。${QUALITY_LAYER}，${typeLayer}。注意：此角色为「${char.name}」，请严格保持其外貌、服装与配饰的完整性和辨识度，不要改变或简化。负面提示：双人，多个人物，第二个人物，第三人，多人组合，多视图，三视图，多角度，拼图，并排，镜像，倒影，剪影，侧面视角，背面视角，${NEGATIVE_PROMPT}`;
 }
