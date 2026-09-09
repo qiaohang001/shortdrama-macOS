@@ -24,7 +24,7 @@ const getVideoModes = (provider) => {
   return VIDEO_MODES.filter(m => keys.includes(m.key));
 };
 
-// 视频生成渠道（provider）：AutoDL托管 / 自部署Wan2.2高级 / 百炼可灵3.0顶级
+// 视频生成渠道（provider）：AutoDL托管 / 自部署MiniMax H3高级 / 百炼可灵3.0顶级
 const VIDEO_PROVIDERS = [
   { key: "autodl", label: "标准生成", desc: "低配托管，1-3积分/秒" },
   { key: "wan22", label: "高级生成", desc: "自部署 MiniMax H3，720P=5/1080P=6积分/秒" },
@@ -81,7 +81,7 @@ const getResolutions = (mode, provider) => {
   return list;
 };
 
-// 根据模式获取可用时长（I2V/S2V/IA2V=1-10秒，R2V/T2V=1-15秒；高级生成Wan2.2的I2V支持30/60秒长视频分段续接）
+// 根据模式获取可用时长（I2V/S2V/IA2V=1-10秒，R2V/T2V=1-15秒；高级生成MiniMax H3的I2V支持30/60秒长视频分段续接）
 const getDurations = (mode, provider) => {
   let list = DURATIONS.filter(d => d.key <= (mode === "i2v" || mode === "ia2v" || mode === "s2v" ? 10 : 15));
   if (provider === "wan22" && mode === "i2v") {
@@ -120,7 +120,7 @@ const I2V_WORKFLOW_ID = "minimax_h3_lightx2v_v5";
 const R2V_WORKFLOW_ID = "minimax_h3_lightx2v";
 const IA2V_WORKFLOW_ID = "minimax_h3_image_audio_to_video_v2";
 const T2V_WORKFLOW_ID = "minimax_h3_lightx2v_no_pic";
-const WAN22_WORKFLOW_ID = "wan22_vace_fun_a14b"; // 自部署 Wan2.2-VACE-Fun-A14B
+const WAN22_WORKFLOW_ID = "minimax_h3_a14b"; // 自部署 MiniMax H3（原 wan22 渠道名保留，变量名兼容不动）
 const KLING_WORKFLOW_ID = "kling_v3_omni"; // 阿里云百炼可灵 v3-omni
 
 // 视频风格选项
@@ -519,7 +519,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       const recommendedCam = recommendCamera(desc, sh.title || "", dialogue);
       const cameraLibText = Object.entries(CAMERA_MOVES).map(([k, v]) => `${v.name}：${v.desc}`).join("\n");
       
-      const prompt = `你是一名专业的AI视频生成提示词工程师，精通Wan2.2视频生成模型。
+      const prompt = `你是一名专业的AI视频生成提示词工程师，精通MiniMax H3视频生成模型。
 请将以下简单的分镜描述，细化成一段按时间分段的、专业详细的中文视频提示词。
 
 输出格式（必须严格按此格式，不要添加其他内容）：
@@ -680,6 +680,7 @@ ${refineTpl.guide}
 
 严格要求：
 - 【重要·纯场景空镜】场景提示词必须是空无一人的环境空镜：严禁出现任何人、人群、人潮、人影、背影、半身像、脸、手、脚等任何人体或身体部位；严禁兵器被人握持、手持道具等动作描写；"万头攒动/人潮涌动"等一律转化为空旷的广场、台阶、街道等无人环境
+- 【构图】横幅16:9横向构图，画面开阔，主体居中或黄金分割位，留出天空与地面层次
 - 合并相同/相似场景（"小巷"与"深夜小巷"算同一个）
 - 按出现频率排序，最多12个场景
 - 只输出JSON数组，不要任何其他文字或markdown代码块，格式：
@@ -746,7 +747,7 @@ ${shotTexts}`;
       const envPrompt = (scene.prompt || "").replace(/人物：[^\n。；]*/g, "").replace(/△[^\n]*/g, "").replace(/【[^】]*】/g, "").trim() || "";
       const prompt = `你是专业的AI生图提示词工程师。请优化以下场景的生图提示词，使其更精致、可直接用于AI生图。
 要求：1. 60-120字；2. 包含：环境主体与空间结构、时代风格、光影色调、氛围情绪、关键道具；3. 只输出提示词本身，不要解释、不要markdown代码块。
-【重要·纯场景空镜】这是场景概念图，必须是空无一人的环境空镜：严禁出现任何人、人群、人潮、人影、背影、脸、手、脚等任何人体或身体部位；严禁"铁手套握飞针"等任何手持兵器/道具的动作描写；"万头攒动/人潮涌动"等一律改为空旷的广场、台阶、街道等无人环境；忽略下面描述中的全部人物、动作、台词细节，只提炼环境本身：空间结构、建筑陈设、自然景观、天气、无人场景道具、光影色调、氛围情绪。
+【重要·纯场景空镜】这是场景概念图，必须是空无一人的环境空镜：严禁出现任何人、人群、人潮、人影、背影、脸、手、脚等任何人体或身体部位；严禁"铁手套握飞针"等任何手持兵器/道具的动作描写；"万头攒动/人潮涌动"等一律改为空旷的广场、台阶、街道等无人环境；忽略下面描述中的全部人物、动作、台词细节，只提炼环境本身：空间结构、建筑陈设、自然景观、天气、无人场景道具、光影色调、氛围情绪。【构图】横幅16:9横向构图，画面开阔，主体居中或黄金分割位，留出天空与地面层次。
 
 场景名称：${scene.name}
 环境描述：${envDesc}
@@ -786,7 +787,7 @@ ${shotTexts}`;
     log(`正在生成场景「${scene.name}」图片...`);
     try {
       const prompt = scene.prompt || scene.desc || scene.name;
-      const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1328x1328", n: 1 });
+      const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1664x928", n: 1 });
       const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
       if (!imageUrl) throw new Error("未返回图片地址");
       updateScenes(scenes.map(s => s.id === scene.id ? { ...s, image: imageUrl } : s));
@@ -1237,7 +1238,7 @@ ${shotTexts}`;
       // 根据模式选择不同的工作流ID
       let currentWorkflowId;
       if (videoProvider === "wan22") {
-        currentWorkflowId = selectedMode === "s2v" ? WAN22_WORKFLOW_ID + "_s2v" : WAN22_WORKFLOW_ID + "_i2v"; // 自部署 Wan2.2-VACE-Fun-A14B
+        currentWorkflowId = selectedMode === "s2v" ? WAN22_WORKFLOW_ID + "_s2v" : WAN22_WORKFLOW_ID + "_i2v"; // 自部署 MiniMax H3
       } else if (videoProvider === "kling") {
         currentWorkflowId = KLING_WORKFLOW_ID; // 可灵 v3-omni
       } else if (selectedMode === "i2v" || selectedMode === "s2v") {
@@ -1279,7 +1280,7 @@ ${shotTexts}`;
             type: "video",
             payload: {
               workflow: currentWorkflowId,
-              model: videoProvider === "wan22" ? "Wan2.2-VACE-Fun-A14B" : (videoProvider === "kling" ? "Kling-v3-omni" : "MiniMax-H3"),
+              model: videoProvider === "wan22" ? "MiniMax-H3-A14B" : (videoProvider === "kling" ? "Kling-v3-omni" : "MiniMax-H3"),
               mode: selectedMode,
               provider: videoProvider,
               ...segParams,
@@ -1307,7 +1308,7 @@ ${shotTexts}`;
           type: "video",
           payload: {
             workflow: currentWorkflowId,
-            model: videoProvider === "wan22" ? "Wan2.2-VACE-Fun-A14B" : (videoProvider === "kling" ? "Kling-v3-omni" : "MiniMax-H3"),
+            model: videoProvider === "wan22" ? "MiniMax-H3-A14B" : (videoProvider === "kling" ? "Kling-v3-omni" : "MiniMax-H3"),
             mode: selectedMode,
             provider: videoProvider,
             ...workflowParams,
@@ -1608,7 +1609,7 @@ ${shotTexts}`;
               if (nextMode !== selectedMode) {
                 setSelectedMode(nextMode);
               }
-              // 长视频（30/60秒）仅高级生成 Wan2.2 的 I2V 可用；切到其他渠道/模式时回到常规时长
+              // 长视频（30/60秒）仅高级生成 MiniMax H3 的 I2V 可用；切到其他渠道/模式时回到常规时长
               if (duration >= 30 && !(newProvider === "wan22" && nextMode === "i2v")) {
                 setDuration(Math.min(duration, getMaxDuration(nextMode)));
               }
