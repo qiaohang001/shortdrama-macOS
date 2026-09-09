@@ -1,11 +1,21 @@
 import React, { useState, useRef, useEffect } from "react";
 import mammoth from "mammoth";
 import { api } from "../../dispatch-jobs.js";
-import { readTextFileAuto } from "../../utils.js";
+import { readTextFileAuto, parseSourceToScript } from "../../utils.js";
 import { isLoggedIn, precheckCredits, deductCredits, getCreditBalance } from "../../utils/backend-api.js";
 import { getPrice } from "../../utils/pricing-utils.js";
+import { buildCharacterBasePrompt } from "./CharacterManager.jsx";
 
 // 健壮的JSON解析函数：处理markdown代码块、多余文字、常见格式错误
+// 剧本风格自动识别：写入 project.styleKey，供人物提示词风格层使用
+const detectScriptStyle = (text) => {
+  const t = (text || "").slice(0, 3000);
+  if (/(科幻|星际|未来|机甲|赛博|末世|外太空)/.test(t)) return "cyberpunk";
+  if (/(玄幻|修仙|仙侠|修真|武侠|江湖|武林|门派|侠客|剑客|古风|朝堂|帝王|将军|盟主)/.test(t)) return "wuxia";
+  if (/(现代|都市|职场|校园|豪门|总裁|医院)/.test(t)) return "realistic";
+  if (/(民国|军阀|旗袍|租界)/.test(t)) return "noir";
+  return "";
+};
 const robustParseJSON = (text) => {
   if (!text) return null;
   let clean = text.trim();
@@ -99,7 +109,7 @@ export function NewScriptModule({ project, update, log, onSwitchTab }) {
       }
 
       log("正在分析剧本内容...");
-      log("⏳ 剧本较长，AI分析约需1-3分钟，请耐心等待，期间请勿重复点击");
+      log("本地解析并清洗分集内容（100%忠实原文），请稍候");
 
       // 未登录用户不能使用
       if (!isLoggedIn()) {
@@ -108,7 +118,96 @@ export function NewScriptModule({ project, update, log, onSwitchTab }) {
         return;
       }
       // 积分预校验（上传剧本AI分析价格从调度机获取）
-      const analyzePrice = getPrice("llm_script_analyze", 1.0);
+      // 本地清洗已分集剧本原文：删除制作标注（【节拍】【AI 画面提示】【字幕建议】等），
+// 只保留场景头/动作/台词，100% 忠实于原文，不经过 LLM 改写。
+// 兼容"每场景一整行"与"逐行排版"两种格式。
+// 把场景列表转换为统一的场景资产结构（视频生成界面用 name/desc/image，素材库用 title）
+function toSceneAssets(scenes) {
+  return (scenes || []).map((s, i) => ({
+    id: s.id || ("scene_" + Date.now() + "_" + i),
+    name: s.name || s.title || ("场景" + (i + 1)),
+    title: s.title || s.name || ("场景" + (i + 1)),
+    desc: s.desc || "",
+    image: s.image || "",
+    imageUrl: s.imageUrl || null,
+    videoUrl: s.videoUrl || null,
+    source: s.source || "auto"
+  }));
+}
+
+// 从清洗后的分集内容中提取场景资产（按 1-1 场景头标记，全剧去重）
+function extractSceneAssets(episodes) {
+  const out = [];
+  const seen = new Set();
+  (episodes || []).forEach((ep, ei) => {
+    for (const ln of (ep.content || "").split("\n")) {
+      const m = ln.match(/^[\d]+-\d+\s+(.+?)\s+(?:日|夜|清晨|黄昏|黎明|午后|凌晨|晌午|傍晚)/);
+      if (m) {
+        const t = m[1].trim();
+        if (!seen.has(t)) {
+          seen.add(t);
+          out.push({ id: "scene_" + Date.now() + "_" + out.length, name: t, title: t, desc: ln, image: "", imageUrl: null, videoUrl: null, source: "auto", episodeId: ep.id || null });
+        }
+      }
+    }
+  });
+  return out;
+}
+
+// 把 LLM 生成的完整剧本文档（剧情梗概+人物小传+分集分镜脚本）走上传剧本同款本地解析+清洗管道
+function buildFromScriptDoc(text, baseTitle) {
+  const local = parseSourceToScript(text || "");
+  const localEps = local.episodes || [];
+  const meta = local.meta || {};
+  if (localEps.length === 0) {
+    // 兜底：识别不到集边界时按单集处理
+    return {
+      episodes: [{ id: "ep_1", title: baseTitle || "第1集", content: cleanEpisode(text || "") }],
+      synopsis: (text || "").slice(0, 120),
+      characters: [], scenes: [], meta
+    };
+  }
+  const episodes = localEps.map((lp, i) => ({
+    id: "ep_" + (i + 1),
+    title: lp.title || ("第" + (i + 1) + "集"),
+    content: cleanEpisode(lp.content || lp.body || "")
+  }));
+  const synopsis = meta.synopsis || (text || "").slice(0, 200) + "...";
+  let characters = [];
+  if (meta.charBlock) {
+    const charLines = meta.charBlock.split("\n").map((s) => s.trim()).filter((s) => /^[\u4e00-\u9fa5·]{2,8}\s*[（(]/.test(s));
+    characters = charLines.map((ln, i) => {
+      const nm = (ln.match(/^([\u4e00-\u9fa5·]{2,8})/) || [])[1] || ("角色" + (i + 1));
+      const role = (ln.match(/[（(]([^）)]{1,30})[）)]/) || [])[1] || "";
+      const desc = ln.replace(/^([\u4e00-\u9fa5·]{2,8})\s*[（(][^）)]*[）)]\s*/, "");
+      return { id: "char_" + Date.now() + "_" + i + "_" + Math.random().toString(36).slice(2, 6), name: nm, role, personality: "", appearance: (desc || ln).slice(0, 100), image: null, locked: false };
+    });
+  }
+  characters = characters.map((ch) => ({ ...ch, promptCn: ch.promptCn || buildCharacterBasePrompt(ch) }));
+  const scenes = extractSceneAssets(episodes);
+  if (scenes.length === 0) {
+    episodes.forEach((ep, i) => {
+      scenes.push({ id: "scene_" + Date.now() + "_" + i, name: ep.title, title: ep.title, desc: ep.content || "", image: "", imageUrl: null, videoUrl: null, source: "auto", episodeId: ep.id });
+    });
+  }
+  return { episodes, synopsis, characters, scenes, meta };
+}
+
+function cleanEpisode(body) {
+  let s = body || "";
+  // 1) 删除【节拍：xxx】标注
+  s = s.replace(/【节拍：[^】]*】/g, "");
+  // 2) 删除【AI 画面提示・xxx】块：从标记起到行尾（或下一个【）的内容
+  s = s.replace(/【AI 画面提示[^】]*】[^【\n]*/g, "");
+  // 3) 删除独立"字幕建议：xxx"
+  s = s.replace(/字幕建议：[^\n]*/g, "");
+  // 4) 清理残留：压缩空白、去掉空行、去掉行尾多余标点
+  s = s.replace(/[ \t]+/g, " ");
+  s = s.split("\n").map((l) => l.trim()).filter(Boolean).join("\n");
+  return s;
+}
+
+const analyzePrice = getPrice("llm_script_analyze", 2.0);
       try {
         const precheck = await precheckCredits(analyzePrice, "text", "上传剧本AI分析");
         if (!precheck.sufficient && precheck.sufficient !== undefined) {
@@ -122,16 +221,76 @@ export function NewScriptModule({ project, update, log, onSwitchTab }) {
       }
 
       try {
-        // 调用 LLM 自动分集和提取人物
-        const prompt = `你是一名专业竖屏短剧编剧。请将以下剧本内容**完整拆分为所有集**，不要省略任何内容，并提取所有人物信息。
+        // ── 先用本地解析器识别集边界（支持"第一集/第30集"中文数字 + 阿拉伯数字）──
+        const local = parseSourceToScript(scriptContent);
+        const localEps = local.episodes || [];   // [{title, body, order}]
+
+        if (localEps.length >= 2) {
+          // ✅ 已分集剧本：完全本地处理（100%忠实原文，零LLM调用零成本）
+          log(`已识别剧本共 ${localEps.length} 集（本地解析），本地清洗中...`);
+          const meta = local.meta || {};
+
+          // 1) 集内容：清洗制作标注，保留场景/动作/台词原文
+          const episodes = localEps.map((lp, i) => ({
+            id: `ep_${i + 1}`,
+            title: lp.title || `第${i + 1}集`,
+            content: cleanEpisode(lp.content || lp.body || "")
+          }));
+
+          // 2) 梗概：直接用原文梗概（忠实）
+          const synopsis = meta.synopsis || (scriptContent || "").slice(0, 200) + "...";
+
+          // 3) 人物：本地从人物小传按"名字（身份）"行提取，姓名与原文完全一致
+          let characters = [];
+          if (meta.charBlock) {
+            const charLines = meta.charBlock.split("\n").map((s) => s.trim()).filter((s) => /^[\u4e00-\u9fa5·]{2,8}\s*[（(]/.test(s));
+            characters = charLines.map((ln, i) => {
+              const nm = (ln.match(/^([\u4e00-\u9fa5·]{2,8})/) || [])[1] || ("角色" + (i + 1));
+              const role = (ln.match(/[（(]([^）)]{1,30})[）)]/) || [])[1] || "";
+              const desc = ln.replace(/^([\u4e00-\u9fa5·]{2,8})\s*[（(][^）)]*[）)]\s*/, "");
+              return { id: "char_" + Date.now() + "_" + i + "_" + Math.random().toString(36).slice(2, 6), name: nm, role, personality: "", appearance: (desc || ln).slice(0, 100), image: null, locked: false };
+            });
+          }
+          // 自动生成角色提示词（与"AI分析人物"同款本地模板，不额外扣费），用户在生成前可直接修改
+          characters = (characters || []).map((ch) => ({ ...ch, promptCn: ch.promptCn || buildCharacterBasePrompt(ch) }));
+
+          // 4) 场景：从各集原文提取场景头（如"1-1 武林大会广场 日 外"）
+          const scenes = [];
+          const seen = new Set();
+          for (const ep of episodes) {
+            for (const ln of (ep.content || "").split("\n")) {
+              const m = ln.match(/^[\d]+-[\d]+\s+(.+?)\s+(?:日|夜|清晨|黄昏|黎明|午后|凌晨|晌午|傍晚)/);
+              if (m) {
+                const t = m[1].trim();
+                if (!seen.has(t)) { seen.add(t); scenes.push({ title: t, desc: ln }); }
+              }
+            }
+          }
+
+          log(`剧本分析完成：${episodes.length}集，${characters.length}个人物，${scenes.length}个场景`);
+          update({
+            styleKey: detectScriptStyle(scriptContent || synopsis || ""),
+        title: name,
+            script: scriptContent,
+            outline: { synopsis: synopsis || (scriptContent?.slice(0, 100) + "...") || "上传的剧本内容", characters, relations: [] },
+            episodes,
+            scenes: scenes.map((s, i) => ({
+              id: `scene_${i + 1}`, episodeId: episodes[i]?.id || episodes[0]?.id || null,
+              title: s.title || `场景${i + 1}`, desc: s.desc || "", imageUrl: null, videoUrl: null
+            })),
+            shots: [],
+            materials: { characters, scenes: toSceneAssets(scenes) }
+          });
+        } else {
+          // ✅ 未分集文本（小说/散文）：保持 LLM 按内容拆分（每集300-500字自然切分）
+          const prompt = `你是一名专业竖屏短剧编剧。请将以下小说/剧本内容**完整拆分为短剧分集**，不要省略任何内容，并提取所有人物信息。
 
 要求：
-1. **必须完整拆分所有集**，根据剧本内容判断总集数，不要只拆10集，有多少集就拆多少集
-2. 每集时长90-120秒，对应300-500字剧本内容
-3. 每集必须有明确的冲突点和钩子（结尾留悬念）
-4. 人物信息要详细，包含外貌特征（便于AI生图保持一致性）
-5. **只输出纯JSON，不要markdown代码块，不要解释，不要省略号**
-6. episodes数组必须包含所有集，不能截断
+1. 每集时长90-120秒，对应300-500字剧本内容，按内容情节自然切分总集数，不要少拆也不要硬拆
+2. 每集必须有明确的冲突点和钩子（结尾留悬念）
+3. 人物信息要详细，包含外貌特征（便于AI生图保持一致性）
+4. **只输出纯JSON，不要markdown代码块，不要解释，不要省略号**
+5. episodes数组必须完整，不能截断
 
 剧本内容：
 ${scriptContent.slice(0, 20000)}
@@ -150,110 +309,92 @@ ${scriptContent.slice(0, 20000)}
   ]
 }`;
 
-        const res = await api("/api/llm/chat", {
-          method: "POST",
-          body: JSON.stringify({
-            messages: [{ role: "user", content: prompt }], max_tokens: 8192, llm_type: "script_analyze"
-          })
-        });
+          const res = await api("/api/llm/chat", {
+            method: "POST",
+            body: JSON.stringify({
+              messages: [{ role: "user", content: prompt }], max_tokens: 8192, llm_type: "script_analyze"
+            })
+          });
 
-        const text = res.text || "{}";
-        console.log("[上传剧本LLM输出]", text);
-        log("LLM返回长度：" + text.length + "字符");
+          const text = res.text || "{}";
+          console.log("[上传剧本LLM输出]", text);
+          log("LLM返回长度：" + text.length + "字符");
 
-        // 使用健壮的JSON解析
-        let parsed = robustParseJSON(text);
-        if (!parsed) {
-          log("JSON解析失败，按字数智能分集");
-          // 智能分集：按每集400字拆分
-          const chunkSize = 400;
-          const chunks = [];
-          for (let i = 0; i < scriptContent.length; i += chunkSize) {
-            chunks.push(scriptContent.slice(i, i + chunkSize));
+          let parsed = robustParseJSON(text);
+          let episodes = (parsed?.episodes || []).map((ep, i) => ({
+            id: `ep_${i + 1}`,
+            title: ep.title || `第${i + 1}集`,
+            content: ep.content || ""
+          }));
+
+          // 兜底：LLM失败/集为空时，用本地解析结果（有集标题则用，否则整篇为第1集），不再400字盲切
+          if (!parsed || episodes.length === 0) {
+            log("JSON解析失败/集为空，使用本地解析结果");
+            episodes = localEps.map((ep, i) => ({
+              id: `ep_${i + 1}`,
+              title: ep.title || `第${i + 1}集`,
+              content: ep.body || ""
+            }));
           }
-          parsed = {
-            synopsis: scriptContent.slice(0, 100),
-            episodes: chunks.map((c, i) => ({ title: `第${i + 1}集`, content: c })),
-            characters: [],
-            scenes: []
-          };
-        }
 
-        let episodes = (parsed.episodes || []).map((ep, i) => ({
-          id: `ep_${i + 1}`,
-          title: ep.title || `第${i + 1}集`,
-          content: ep.content || ""
-        }));
+          let characters = (parsed?.characters || []).map((c, i) => ({
+            id: `char_${i + 1}`,
+            name: c.name || `角色${i + 1}`,
+            role: c.role || "",
+            personality: c.personality || "",
+            appearance: c.appearance || "",
+            image: null,
+            locked: false
+          }));
 
-        // 如果episodes为空，按字数智能分集
-        if (episodes.length === 0) {
-          log("episodes为空，按字数智能分集");
-          const chunkSize = 400;
-          for (let i = 0; i < scriptContent.length; i += chunkSize) {
-            episodes.push({
-              id: `ep_${episodes.length + 1}`,
-              title: `第${episodes.length + 1}集`,
-              content: scriptContent.slice(i, i + chunkSize)
-            });
+          if (characters.length === 0) {
+            log("characters为空，生成默认角色");
+            characters = [
+              { id: "char_1", name: "主角", role: "主角", personality: "坚韧", appearance: "", image: null, locked: false },
+              { id: "char_2", name: "反派", role: "反派", personality: "狡诈", appearance: "", image: null, locked: false },
+              { id: "char_3", name: "配角", role: "配角", personality: "善良", appearance: "", image: null, locked: false }
+            ];
           }
+
+          const scenes = (parsed?.scenes || []).map((s, i) => ({
+            id: `scene_${i + 1}`,
+            episodeId: episodes[i]?.id || episodes[0]?.id || null,
+            title: s.title || `场景${i + 1}`,
+            desc: s.desc || "",
+            imageUrl: null,
+            videoUrl: null
+          }));
+
+          update({
+            styleKey: detectScriptStyle(scriptContent || synopsis || ""),
+        title: name,
+            script: scriptContent,
+            outline: {
+              synopsis: parsed?.synopsis || (scriptContent?.slice(0, 100) + "...") || "上传的剧本内容",
+              characters,
+              relations: []
+            },
+            episodes,
+            scenes,
+            shots: [],
+            materials: { characters, scenes: toSceneAssets(scenes) }
+          });
+
+          // 自动生成角色提示词（与"AI分析人物"同款本地模板，不额外扣费），用户在生成前可直接修改
+          characters = (characters || []).map((ch) => ({ ...ch, promptCn: ch.promptCn || buildCharacterBasePrompt(ch) }));
+
+          log(`剧本分析完成：${episodes.length}集，${characters.length}个人物`);
         }
 
-        let characters = (parsed.characters || []).map((c, i) => ({
-          id: `char_${i + 1}`,
-          name: c.name || `角色${i + 1}`,
-          role: c.role || "",
-          personality: c.personality || "",
-          appearance: c.appearance || "",
-          image: null,
-          locked: false
-        }));
-
-        // 如果characters为空，从剧本内容提取常见角色名或生成默认
-        if (characters.length === 0) {
-          log("characters为空，生成默认角色");
-          characters = [
-            { id: "char_1", name: "主角", role: "主角", personality: "坚韧", appearance: "", image: null, locked: false },
-            { id: "char_2", name: "反派", role: "反派", personality: "狡诈", appearance: "", image: null, locked: false },
-            { id: "char_3", name: "配角", role: "配角", personality: "善良", appearance: "", image: null, locked: false }
-          ];
-        }
-
-        const scenes = (parsed.scenes || []).map((s, i) => ({
-          id: `scene_${i + 1}`,
-          episodeId: episodes[i]?.id || episodes[0]?.id || null,
-          title: s.title || `场景${i + 1}`,
-          desc: s.desc || "",
-          imageUrl: null,
-          videoUrl: null
-        }));
-
-        // 上传剧本时不自动生成分镜，由用户手动点击"拆分当前集"生成
-        const shots = [];
-
-        update({
-          title: name,
-          script: scriptContent,
-          outline: {
-            synopsis: parsed.synopsis || (scriptContent?.slice(0, 100) + "...") || "上传的剧本内容",
-            characters: characters,
-            relations: []
-          },
-          episodes,
-          scenes,
-          shots,
-          materials: { characters }
-        });
-
-        log(`剧本分析完成：${episodes.length}集，${characters.length}个人物`);
-
-        // 积分扣减（上传剧本AI分析1积分）
+        // 积分扣减（上传剧本AI分析2积分）
         if (isLoggedIn()) {
           try {
-                        log(`✅ 积分扣减成功：1积分`);
+            await deductCredits(analyzePrice, "text", "上传剧本AI分析");
+            log(`✅ 积分扣减成功：${analyzePrice}积分`);
             try {
               const balanceData = await getCreditBalance();
               if (window.onCreditUpdate) window.onCreditUpdate(balanceData.balance || balanceData.credits || 0);
-            if (window.refreshUserInfo) window.refreshUserInfo();
+              if (window.refreshUserInfo) window.refreshUserInfo();
             } catch (e) {}
           } catch (e) {
             log(`⚠️ 积分扣减失败：${e.message}`);
@@ -262,7 +403,8 @@ ${scriptContent.slice(0, 20000)}
       } catch (err) {
         log("分析失败，使用基础模式：" + err.message);
         update({
-          title: name,
+          styleKey: detectScriptStyle(scriptContent || synopsis || ""),
+        title: name,
           script: scriptContent,
           outline: {
             synopsis: "上传的剧本内容",
@@ -305,17 +447,47 @@ ${scriptContent.slice(0, 20000)}
     }
     try {
       const episodeCount = parseInt(params.episodes) || 5;
-      const prompt = `你是一名爆款竖屏短剧编剧。请根据以下参数生成完整的剧本大纲和分集内容。
+      const prompt = `你是一名爆款竖屏短剧编剧。请根据以下参数直接输出一部完整竖屏短剧的剧本文档（纯文本，不要JSON、不要markdown代码块、不要解释）。
+
+【剧本文档格式】必须严格按照以下结构输出：
+
+剧情梗概
+（150-200字，含核心冲突和卖点，一段话）
+
+人物小传
+主角名（主角・身份）
+一句话定位：xxx
+性格：xxx
+动机：xxx
+成长弧线：xxx
+视觉方向：xxx
+关键道具：xxx
+（每个主要人物都这样写一段，至少3个人物）
+
+第一集：标题
+1-1 场景名 日 外 人物：角色名
+△（景别）动作与画面描述。
+角色名：台词内容
+【节拍：节奏点名称】
+【AI 画面提示・通用】16:9 横屏。画面/运镜/氛围/音效描述。字幕建议：xxx
+1-2 场景名 夜 内 人物：角色名
+△（景别）动作与画面描述。
+角色名：台词内容
+【节拍：节奏点名称】
+【AI 画面提示・通用】16:9 横屏。画面/运镜/氛围/音效描述。字幕建议：xxx
+
+第二集：标题
+（与第一集相同的格式，继续输出）
+（直到全部集数写完）
 
 【创作要求】
-1. 竖屏短剧，每集90-120秒（300-500字）
-2. 开头3秒必须有强钩子（冲突/悬念/反转）
-3. 每集结尾留悬念，引导看下一集
-4. 节奏快，冲突密集，爽点充足
-5. 人物设定要具体（外貌描述便于AI生图保持一致性）
-6. 【重要】台词格式必须规范：每句台词必须以"角色名：台词内容"格式开头，角色名要明确，不能用"他/她/他们"等代词，例如："苏念：你终于来了。"、"苏婉：废物，今天你若不把《朱雀诀》交出来..."
-7. 【台词打磨】台词必须经过精心打磨，精炼有力，符合人物性格和身份，有记忆点和传播性，避免口水话、废话和重复表达；关键台词要有冲击力和情绪张力，能让观众产生共鸣
-8. 【重要】只输出纯JSON，不要markdown代码块，不要解释，不要多余文字，【重要】必须返回完整闭合的JSON，不要截断，不要省略号
+1. 竖屏短剧，每集90-120秒（300-500字），每集包含1-2个场景（1-1、1-2），场景编号必须连续
+2. 开头3秒必须有强钩子（冲突/悬念/反转），每集结尾留悬念
+3. 节奏快，冲突密集，爽点充足
+4. 人物设定要具体（外貌描述便于AI生图保持一致性）
+5. 【重要】台词格式必须规范：每句台词必须以"角色名：台词内容"格式开头，角色名要明确，不能用"他/她/他们"等代词
+6. 【台词打磨】台词精炼有力，符合人物性格和身份，有记忆点和传播性，避免口水话、废话和重复表达；关键台词要有冲击力和情绪张力
+7. 【重要】只输出剧本正文纯文本，不要JSON、不要解释、不要省略号、不要截断
 
 【参数】
 - 剧本类型：${params.type}
@@ -324,20 +496,7 @@ ${scriptContent.slice(0, 20000)}
 - 单集时长：${params.duration}秒
 - 主角性别：${params.gender}
 - 核心关键词：${params.keywords || "无"}
-
-【输出JSON格式】（必须严格按照此格式，包含 ${episodeCount} 个episodes和至少3个characters）：
-{
-  "synopsis": "故事梗概（必填，50-100字，含核心冲突和卖点）",
-  "characters": [
-    {"name": "主角名", "role": "身份/职业", "personality": "性格标签", "appearance": "外貌描述"},
-    {"name": "反派名", "role": "身份/职业", "personality": "性格标签", "appearance": "外貌描述"},
-    {"name": "配角名", "role": "身份/职业", "personality": "性格标签", "appearance": "外貌描述"}
-  ],
-  "episodes": [
-    {"title": "第1集：标题", "content": "本集完整剧本300-500字"},
-    {"title": "第2集：标题", "content": "本集完整剧本300-500字"}
-  ]
-}`;
+`;
 
       const res = await api("/api/llm/chat", {
         method: "POST",
@@ -346,37 +505,15 @@ ${scriptContent.slice(0, 20000)}
         })
       });
 
-      // 解析 LLM 返回的 JSON
+      // 本地解析+清洗：LLM 输出完整剧本文档 → parseSourceToScript 分集 → cleanEpisode 清洗
       const text = res.text || "{}";
-      console.log("[LLM原始输出]", text);
+      console.log("[LLM原始输出]", text.slice(0, 300));
       log("LLM返回长度：" + text.length + "字符");
 
-      // 使用健壮的JSON解析
-      let parsed = robustParseJSON(text);
-      if (!parsed) {
-        log("JSON解析失败，使用原始文本作为内容");
-        parsed = {
-          synopsis: text.slice(0, 100),
-          episodes: Array.from({ length: episodeCount }, (_, i) => ({
-            title: `第${i + 1}集`,
-            content: i === 0 ? text : `第${i + 1}集内容待生成`
-          })),
-          characters: [
-            { name: "主角", role: "主角", personality: "坚韧", appearance: "" },
-            { name: "反派", role: "反派", personality: "狡诈", appearance: "" },
-            { name: "配角", role: "配角", personality: "善良", appearance: "" }
-          ]
-        };
-      }
+      const built = buildFromScriptDoc(text, params.title || "新剧本");
+      let episodes = built.episodes;
 
-      // 确保episodes数量足够
-      let episodes = (parsed.episodes || []).map((ep, i) => ({
-        id: `ep_${i + 1}`,
-        title: ep.title || `第${i + 1}集`,
-        content: ep.content || ""
-      }));
-
-      // 如果episodes不够，自动补充
+      // 确保集数足够
       if (episodes.length < episodeCount) {
         log(`警告：模型只返回了${episodes.length}集，补充到${episodeCount}集`);
         for (let i = episodes.length; i < episodeCount; i++) {
@@ -388,32 +525,32 @@ ${scriptContent.slice(0, 20000)}
         }
       }
 
-      const scenes = episodes.map((ep, i) => ({
-        id: `scene_${i + 1}`,
-        episodeId: ep.id,
-        title: ep.title,
-        desc: ep.content || ""
-      }));
+      const scenes = built.scenes;
 
       // 确保characters至少3个
-      let characters = parsed.characters || [];
-      if (characters.length === 0) {
-        characters = [
+      let characters = built.characters || [];
+      if (characters.length < 3) {
+        const have = new Set(characters.map((ch) => ch.name));
+        const defs = [
           { name: "主角", role: "主角", personality: "坚韧", appearance: "" },
           { name: "反派", role: "反派", personality: "狡诈", appearance: "" },
           { name: "配角", role: "配角", personality: "善良", appearance: "" }
         ];
+        for (const d of defs) {
+          if (!have.has(d.name)) { characters.push({ ...d, image: null, locked: false }); }
+        }
       }
 
-      const synopsis = parsed.synopsis || (episodes[0]?.content?.slice(0, 80) + "...") || ("类型：" + params.type + "，关键词：" + (params.keywords || "无"));
+      const synopsis = built.synopsis || (episodes[0]?.content?.slice(0, 80) + "...") || ("类型：" + params.type + "，关键词：" + (params.keywords || "无"));
 
       update({
+        styleKey: detectScriptStyle(scriptContent || synopsis || ""),
         title: params.title || "新剧本",
         type: params.type,
         episodes,
         outline: { synopsis, characters },
         scenes,
-        materials: { characters }
+        materials: { characters, scenes }
       });
 
       setOutline(parsed);
@@ -421,7 +558,7 @@ ${scriptContent.slice(0, 20000)}
       try {
         // 必须基于现有素材库追加，写死 [] 会让每次创建剧本都清空整个素材库
         const currentAssets = project?.assets || [];
-        const scriptContent = JSON.stringify({ synopsis, characters, episodes, scenes }, null, 2);
+        const scriptContent = text;
         const newTextAsset = {
           id: "a_text_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8),
           type: "text",
@@ -747,19 +884,51 @@ function DetailWizard({ onClose, onCreated, log, update }) {
     }
     try {
       const charsJson = JSON.stringify(form.characters.filter(c => c.name.trim()));
-      const prompt = `你是一名专业竖屏短剧编剧兼分镜导演。请根据以下详细设定生成完整的大纲和分集内容。
+      const prompt = `你是一名专业竖屏短剧编剧兼分镜导演。请根据以下详细设定直接输出一部完整竖屏短剧的剧本文档（纯文本，不要JSON、不要markdown代码块、不要解释）。
 
-创作要求：
-1. 竖屏短剧，每集90-120秒（300-500字）
+【剧本文档格式】必须严格按照以下结构输出：
+
+剧情梗概
+（200字左右，含核心冲突、人物关系、结局走向）
+
+人物小传
+（根据用户人物设定，每个角色一段，格式：）
+角色名（身份）
+一句话定位：xxx
+性格：xxx
+动机：xxx
+成长弧线：xxx
+视觉方向：xxx
+关键道具：xxx
+
+第一集：标题
+1-1 场景名 日 外 人物：角色名
+△（景别）动作与画面描述。
+角色名：台词内容
+【节拍：节奏点名称】
+【AI 画面提示・通用】16:9 横屏。画面/运镜/氛围/音效详细描述。字幕建议：xxx
+1-2 场景名 夜 内 人物：角色名
+△（景别）动作与画面描述。
+角色名：台词内容
+【节拍：节奏点名称】
+【AI 画面提示・通用】16:9 横屏。画面/运镜/氛围/音效详细描述。字幕建议：xxx
+1-3 场景名 日 外 人物：角色名
+（每集包含2-4个场景，场景编号连续）
+
+第二集：标题
+（与第一集相同的格式，继续输出）
+（直到全部集数写完）
+
+【创作要求】
+1. 竖屏短剧，每集90-120秒，每集2-4个场景（1-1到1-4），场景编号必须连续
 2. 严格按照用户设定的人物和剧情生成，不要擅自更改
 3. 开头3秒强钩子，每集结尾留悬念
 4. 冲突密集，节奏快，爽点充足
 5. 场景描述要具体（便于AI生图/生视频）
-6. 【重要】台词格式必须规范：每句台词必须以"角色名：台词内容"格式开头，角色名要明确，不能用"他/她/他们"等代词，例如："苏念：你终于来了。"、"苏婉：废物，今天你若不把《朱雀诀》交出来..."
-7. 【台词打磨】台词必须经过精心打磨，精炼有力，符合人物性格和身份，有记忆点和传播性，避免口水话、废话和重复表达；关键台词要有冲击力和情绪张力，能让观众产生共鸣
-8. 只输出纯JSON，不要markdown代码块，不要解释
+6. 【重要】台词必须以"角色名：台词内容"格式开头，角色名明确，精炼有力、有记忆点
+7. 【重要】只输出剧本正文纯文本，不要JSON、不要解释、不要省略号、不要截断
 
-设定：
+【设定】
 - 剧本名称：${scriptTitle}
 - 类型：${form.type}
 - 时代：${form.genre}
@@ -767,15 +936,8 @@ function DetailWizard({ onClose, onCreated, log, update }) {
 - 故事大纲：${form.outline || "（用户未提供，根据类型和关键词创作）"}
 - 人物设定：${charsJson}
 - 集数：${form.episodes || 5}集
-- 每集时长：${form.durationPerEpisode || 120}秒（约${Math.round((form.durationPerEpisode || 120) * 4)}字）
-
-输出JSON格式：
-{
-  "synopsis": "完整故事梗概（必填，200字，含核心冲突、人物关系、结局走向，不能为空）",
-  "episodes": [
-    {"title": "第X集：吸引人的标题", "content": "本集完整剧本（约${Math.round((form.durationPerEpisode || 120) * 4)}字，含场景描述+人物对话+动作提示）"}
-  ]
-}`;
+- 每集时长：${form.durationPerEpisode || 120}秒
+`;
 
       setDebug("正在调用LLM API...");
       
@@ -793,10 +955,9 @@ function DetailWizard({ onClose, onCreated, log, update }) {
         return;
       }
 
-      // 和快速创建保持一致的text解析
+      // 本地解析+清洗：LLM 输出完整剧本文档 → parseSourceToScript 分集 → cleanEpisode 清洗
       const text = res.text || "{}";
-      setDebug("模型返回text长度：" + text.length + "，前100字：" + text.slice(0, 100));
-      
+      setDebug("模型返回text长度：" + text.length);
       if (!text || text === "{}" || text.length < 10) {
         setDebug("模型返回内容为空，完整返回：" + JSON.stringify(res));
         alert("剧本生成失败：模型返回内容为空，请重试。");
@@ -804,24 +965,9 @@ function DetailWizard({ onClose, onCreated, log, update }) {
         return;
       }
 
-      // 使用健壮的JSON解析
-      let parsed = robustParseJSON(text);
-      if (!parsed) {
-        _log("JSON解析失败，使用原始文本");
-        parsed = {
-          synopsis: text.slice(0, 100),
-          episodes: [{ title: "第1集", content: text }]
-        };
-      }
-
+      const built = buildFromScriptDoc(text, scriptTitle);
+      let episodes = built.episodes;
       const targetEpisodes = parseInt(form.episodes) || 5;
-      let episodes = (parsed.episodes || []).map((ep, i) => ({
-        id: `ep_${i + 1}`,
-        title: ep.title || `第${i + 1}集`,
-        content: ep.content || ""
-      }));
-
-      // 确保集数足够
       if (episodes.length < targetEpisodes) {
         _log(`警告：模型只返回${episodes.length}集，补充到${targetEpisodes}集`);
         for (let i = episodes.length; i < targetEpisodes; i++) {
@@ -829,35 +975,31 @@ function DetailWizard({ onClose, onCreated, log, update }) {
         }
       }
 
-      const scenes = episodes.map((ep, i) => ({
-        id: `scene_${i + 1}`,
-        episodeId: ep.id,
-        title: ep.title,
-        desc: ep.content || ""
-      }));
+      const scenes = built.scenes;
 
       const characters = form.characters.filter(c => c.name.trim()).map(c => ({
         name: c.name, role: c.role, personality: c.personality,
         appearance: c.appearance
       }));
 
-      const synopsis = parsed.synopsis || (episodes[0]?.content?.slice(0, 80) + "...") || (form.type + "题材短剧，" + (form.genre || "") + "风格");
+      const synopsis = built.synopsis || (episodes[0]?.content?.slice(0, 80) + "...") || (form.type + "题材短剧，" + (form.genre || "") + "风格");
 
       setDebug("正在更新项目状态...");
       _update({
+        styleKey: detectScriptStyle(scriptContent || synopsis || ""),
         title: scriptTitle,
         type: form.type,
         episodes,
         outline: { synopsis, characters },
         scenes,
-        materials: { characters }
+        materials: { characters, scenes }
       });
       setDebug("项目状态更新完成，共 " + episodes.length + " 集");
       // 同时存入素材库（生成的剧本文本也保存）
       try {
         // 必须基于现有素材库追加，写死 [] 会让每次创建剧本都清空整个素材库
         const currentAssets = project?.assets || [];
-        const scriptContent = JSON.stringify({ synopsis, characters, episodes, scenes }, null, 2);
+        const scriptContent = text;
         const newTextAsset = {
           id: "a_text_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8),
           type: "text",

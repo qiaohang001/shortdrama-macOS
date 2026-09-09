@@ -108,7 +108,7 @@ export function StoryboardBoard({ project, update, log }) {
       // 积分扣减（分镜生图）
       if (isLoggedIn()) {
         try {
-                    log("✅ 分镜拆分费用已由后端按实际成本扣减");
+                    log("✅ 分镜生图费用已由后端按实际成本扣减");
           try {
             const balanceData = await getCreditBalance();
             if (window.onCreditUpdate) window.onCreditUpdate(balanceData.balance || balanceData.credits || 0);
@@ -165,15 +165,17 @@ export function StoryboardBoard({ project, update, log }) {
     log(`正在拆分「${currentEpisode.title || selectedEp}」的镜头...`);
     try {
       const episodeTitle = currentEpisode.title || "";
-      const prompt = `你是一名专业竖屏短剧分镜导演。请根据以下【第${episodeTitle}】的剧本内容，拆分成10-15个分镜（每集90-120秒，每个分镜约5-10秒）。
+      const prompt = `你是一名专业竖屏短剧分镜导演。请把【第${episodeTitle}】的剧本内容拆分成**10-15个分镜**（每集90-120秒，每个分镜约5-10秒，严禁按大场景粗拆）。
 
-要求：
-1. 每个分镜必须包含完整的镜头语言信息
-2. 景别选择：远景(环境交代)/全景(人物全身)/中景(腰部以上)/近景(胸部以上)/特写(面部或细节)
-3. 运镜方式：固定/推(向前推进)/拉(向后拉开)/摇(左右摇动)/移(平行移动)/跟(跟随主体)
-4. 画面描述要具体（50-100字），包含：时代场景、人物动作表情、光影氛围、环境细节
-5. 台词要准确引用剧本原文
-6. 只输出纯JSON数组，不要markdown代码块，不要解释
+关键规则：
+1. 剧本中出现的"1-1、1-2"、"场景一/二"、"【场景1】"等标记是**大场景（约30-40秒）**，不是分镜！必须把每个大场景内部继续细拆成 2-4 个 5-10 秒的分镜
+2. 一集90-120秒必须拆出 **10-15个** 分镜，数量不足视为错误
+3. 每个分镜必须包含完整的镜头语言信息
+4. 景别选择：远景(环境交代)/全景(人物全身)/中景(腰部以上)/近景(胸部以上)/特写(面部或细节)
+5. 运镜方式：固定/推(向前推进)/拉(向后拉开)/摇(左右摇动)/移(平行移动)/跟(跟随主体)
+6. 画面描述要具体（50-100字），包含：时代场景、人物动作表情、光影氛围、环境细节
+7. 台词要准确引用剧本原文
+8. 只输出纯JSON数组，不要markdown代码块，不要解释
 
 剧本内容：
 ${context.slice(0, 3000)}
@@ -185,6 +187,7 @@ ${context.slice(0, 3000)}
     "title": "镜头标题（简洁概括画面内容）",
     "sceneType": "中景",
     "cameraMove": "推镜",
+    "duration": 8,
     "sceneDesc": "画面描述（50-100字，含时代/场景/人物动作/表情/光影/氛围）",
     "dialogue": "人物台词（无台词则为空字符串）",
     "characters": ["角色名1", "角色名2"]
@@ -228,7 +231,7 @@ ${context.slice(0, 3000)}
           cameraMove: sh.cameraMove || "固定",
           lighting: "自然光",
           emotion: "正常",
-          duration: Math.min(10, Math.max(3, Math.round((currentEpisode.duration || 120) / shotsArray.length))),
+          duration: Math.min(10, Math.max(3, Math.round(Number(sh.duration) || (currentEpisode.duration || 120) / Math.max(shotsArray.length, 1)))),
           promptCn: sh.sceneDesc || "",
           characters: sh.characters || [],
           dialogue: sh.dialogue || "",

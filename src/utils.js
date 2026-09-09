@@ -117,26 +117,64 @@ export function normalizeProject(p) {
   };
 }
 
+// ── 中文数字转阿拉伯（支持"一~十/两/百/千/万"及"十"打头，如 三十→30、十二→12）──
+export function cnNumToInt(s) {
+  if (!s) return NaN;
+  if (/^[0-9]+$/.test(s)) return parseInt(s, 10);
+  const digits = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  let result = 0, current = 0;
+  for (const ch of s) {
+    if (digits[ch] !== undefined) { current = digits[ch]; }
+    else if (ch === "十") { current = current === 0 ? 10 : current * 10; result += current; current = 0; }
+    else if (ch === "百") { current = current === 0 ? 100 : current * 100; result += current; current = 0; }
+    else if (ch === "千") { current = current === 0 ? 1000 : current * 1000; result += current; current = 0; }
+    else if (ch === "万") { result = (result + current) * 10000; current = 0; }
+  }
+  return result + current;
+}
+
+// ── 集标题（支持 阿拉伯/中文数字 + 集/章/卷/回/部）──
+const EP_SPLIT_RE = /^\s*(第\s*[0-9一二三四五六七八九十百千万两]+\s*[集章卷回部](?:[：:\s|｜].*)?)\s*$/m;
+
+// ── 元信息区标题（梗概/人物/类型等信息，不参与分集）──
+const META_HEAD_RE = /^\s*(?:剧情梗概|故事梗概|剧本梗概|梗概|人物小传|角色小传|角色介绍|主要人物|主要角色|人物设定|类型|风格|标签|人设|单集时长|剧作基调|片名|剧名|作品名)\s*[:：|｜]?\s*.*$/;
+
 // 非 AI 的解析骨架：把导入的小说/剧本原文拆成 分集→分镜→台词 三级结构。
 // 真正的「小说→剧本」语义转换（LLM）留待云端模型部署后接入（见 #140 AI 部分）。
 export function parseSourceToScript(raw) {
   const text = (raw || "").replace(/\r\n/g, "\n").trim();
-  if (!text) return { episodes: [], shots: [], dialogues: [] };
+  if (!text) return { meta: { synopsis: "", info: "" }, episodes: [], shots: [], dialogues: [] };
 
-  // 1) 切分「集」：第N集 / 第N章 / Episode N / 集N
-  const epSplit = /^\s*(?:第\s*\d+\s*[集章卷回部]|[Ee]p(?:isode)?\.?\s*\d+|集\s*\d+)/m;
-  let blocks = [];
-  if (epSplit.test(text)) {
-    const parts = text.split(epSplit).map((s) => s.trim()).filter(Boolean);
-    parts.forEach((seg, i) => {
-      const nl = seg.indexOf("\n");
-      const title = ((nl > 0 ? seg.slice(0, nl) : seg).replace(/^[:：]\s*/, "").trim().slice(0, 40)) || ("第" + (i + 1) + "集");
-      const body = nl > 0 ? seg.slice(nl + 1) : "";
-      blocks.push({ title, body });
-    });
-  } else {
-    blocks = [{ title: "第1集", body: text }];
+  // 0) 元信息区：第一个集标题之前的全部内容（梗概/人物小传/类型信息）
+  let metaText = "";
+  let restText = text;
+  const m0 = text.match(EP_SPLIT_RE);
+  if (m0 && m0.index > 0) {
+    metaText = text.slice(0, m0.index).trim();
+    restText = text.slice(m0.index).trim();
   }
+
+  // 1) 切分「集」：按行扫描，遇到集标题行（第N集/第N章/Episode N/集N，阿拉伯+中文数字）开新集，
+  //    其余行追加到当前集正文。逐行状态机，避免跨行正则被 \r\n 干扰。
+  const EP_LINE_RE = /^(?:第\s*(?:\d+|[一二三四五六七八九十百千万两]+)\s*[集章卷回部]|[Ee]p(?:isode)?\.?\s*\d+|集\s*\d+)([：:\s|｜]?[^\n]*)$/;
+  const blocks = [];
+  let cur = null;
+  for (const rawLn of restText.split(/\r?\n/)) {
+    const ln = rawLn.trim();
+    if (!ln) continue;
+    const epM = ln.match(EP_LINE_RE);
+    if (epM) {
+      cur = { title: (epM[0] || "").replace(/^[:：|｜]\s*/, "").trim().slice(0, 60), body: "", order: 0 };
+      blocks.push(cur);
+    } else if (cur) {
+      cur.body += (cur.body ? "\n" : "") + ln;
+    }
+    // 集标题之前的行（异常时）忽略
+  }
+  if (blocks.length === 0) {
+    blocks.push({ title: "第1集", body: restText.trim(), order: 0 });
+  }
+  blocks.forEach((b, i) => { b.order = i + 1; });
 
   const episodes = [];
   const shots = [];
@@ -145,11 +183,11 @@ export function parseSourceToScript(raw) {
   let shotSeq = 0;
   for (const blk of blocks) {
     const epId = "ep_" + Date.now() + "_" + epOrder;
-    episodes.push({ id: epId, title: blk.title, summary: blk.body.slice(0, 200), content: blk.body, order: epOrder });
+    episodes.push({ id: epId, title: blk.title, summary: blk.body.slice(0, 200), content: blk.body, order: blk.order || epOrder });
     epOrder++;
 
-    // 2) 切分「场/镜头」：场景N / 镜头N / 空行分段
-    const sceneMarker = /^\s*(?:【?场景?\s*\d*】?|场景|镜头|场\s*\d+|SC\.?\s*\d+)\s*[:：]?/m;
+    // 2) 切分「场/镜头」：场景N / 镜头N / 分镜编号（1-1 / 1-2）/ 空行分段
+    const sceneMarker = /^\s*(?:【?场景?\s*\d*】?|场景|镜头|场\s*\d+|SC\.?\s*\d+|\d+\s*[-–—]\s*\d+)\s*[:：|｜]?\s*/m;
     let scenesText = [];
     if (sceneMarker.test(blk.body)) {
       const segs = blk.body.split(sceneMarker).map((s) => s.trim()).filter(Boolean);
@@ -182,7 +220,23 @@ export function parseSourceToScript(raw) {
       }
     }
   }
-  return { episodes, shots, dialogues };
+
+  // 元信息细分：梗概区 / 人物区 / 其他
+  let synopsis = "", charBlock = "", infoBlock = "";
+  const metaLines = (metaText || "").split("\n");
+  let curPart = "other";
+  for (const ln of metaLines) {
+    const t = ln.trim();
+    if (!t) continue;
+    if (/^(剧情|故事|剧本)梗概/.test(t)) { curPart = "synopsis"; continue; }
+    if (/^(人物小传|角色小传|角色介绍|主要人物|主要角色|人物设定)/.test(t)) { curPart = "char"; continue; }
+    if (/^(类型|风格|标签|人设|单集时长|剧作基调|片名|剧名|作品名)/.test(t)) { curPart = "info"; continue; }
+    if (curPart === "synopsis") synopsis += (synopsis ? "\n" : "") + t;
+    else if (curPart === "char") charBlock += (charBlock ? "\n" : "") + t;
+    else if (curPart === "info") infoBlock += (infoBlock ? "\n" : "") + t;
+  }
+
+  return { meta: { synopsis, charBlock, infoBlock, raw: metaText }, episodes, shots, dialogues };
 }
 
 export function relTime(ts) {

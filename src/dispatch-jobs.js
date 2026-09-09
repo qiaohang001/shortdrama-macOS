@@ -107,6 +107,24 @@ export async function getJob(jobId) {
 }
 
 /**
+ * 长视频分段续接：提取一段视频的最后一帧（作为下一段 i2v 的首帧）
+ * @param {string} videoUrl 已生成段落的视频 URL
+ * @returns {Promise<{frame_url: string}>} 尾帧图片 COS 永久 URL
+ */
+export async function extractTail(videoUrl) {
+  return await api("/api/longvideo/extract_tail", { method: "POST", body: JSON.stringify({ video_url: videoUrl }) });
+}
+
+/**
+ * 长视频分段续接：把 N 段已生成视频拼接为一个长视频
+ * @param {string[]} videoUrls 按顺序排列的段落视频 URL 列表
+ * @returns {Promise<{video_url: string, segments: number}>} 拼接后视频 URL
+ */
+export async function concatVideos(videoUrls) {
+  return await api("/api/longvideo/concat", { method: "POST", body: JSON.stringify({ video_urls: videoUrls }) });
+}
+
+/**
  * 归一化工人返回的 result_url，保证客户端一定能访问到：
  *  - 服务端把 base_url 配成 localhost / 127.0.0.1（默认配置）时，把 host 换成客户端配置的调度机地址；
  *  - 相对路径（/static/...）补上调度机地址前缀；

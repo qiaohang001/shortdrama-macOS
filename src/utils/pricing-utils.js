@@ -19,7 +19,7 @@ const DEFAULT_PRICING = {
   voice_design_first_use: 60.0,
   voice_design_min_charge: 1.0,
   // LLM文本生成
-  llm_script_analyze: 1.0,
+  llm_script_analyze: 2.0,
   llm_script_quick_create: 3.0,
   llm_script_one_click: 1.0,
   llm_script_detailed: 5.0,
@@ -29,6 +29,7 @@ const DEFAULT_PRICING = {
   llm_episode_refine: 1.0,
   llm_shot_refine: 1.0,
   llm_scene_extract: 1.0,
+  llm_scene_refine: 1.0,
   llm_subtitle_generate: 1.0,
   // 视频生成
   video_t2v_480p: 1.0,
@@ -46,13 +47,13 @@ const DEFAULT_PRICING = {
   // 视频三渠道价格表（按渠道+分辨率 积分/秒；/api/pricing 返回同结构）
   video: {
     autodl: { "480p": 1.0, "768p": 2.0, "1080p": 3.0 },
-    wan27:  { "480p": 4.0, "768p": 6.0, "1080p": 8.0 },
+    wan22:  { "480p": 3.0, "576p": 4.0, "720p": 5.0, "1080p": 6.0 },
     kling:  { "480p": 5.0, "768p": 7.0, "1080p": 9.0 },
   },
   // 视频渠道元数据（名称/描述）
   video_providers: {
     autodl: { name: "标准", desc: "MiniMax H3 · AutoDL 托管" },
-    wan27:  { name: "万相 2.7", desc: "wan2.7-r2v 参考生视频 · 首帧+角色+音色" },
+    wan22:  { name: "高级生成", desc: "MiniMax H3 自部署 · 720P=5/1080P=6积分/秒" },
     kling:  { name: "可灵 3.0", desc: "kling-v3-omni 高画质 · 首帧+参考图" },
   },
   // 3D生成
@@ -120,7 +121,7 @@ export function calcTtsPrice(lineCount = 1, model = "hd") {
  */
 export function calcVideoPrice(mode, resolution, duration, provider = "autodl") {
   const pricing = getPricing();
-  const resKey = resolution.includes("1080") ? "1080p" : (resolution.includes("480") ? "480p" : "768p");
+  const resKey = resolution.includes("1080") ? "1080p" : (resolution.includes("720") ? "720p" : (resolution.includes("576") ? "576p" : (resolution.includes("480") ? "480p" : "768p")));
   // 优先：按渠道 pricing.video[provider][resKey]（/api/pricing 返回结构）
   const videoTable = (pricing && pricing.video) || DEFAULT_PRICING.video;
   const providerTable = (videoTable && videoTable[provider]) || (videoTable && videoTable.autodl);

@@ -33,19 +33,14 @@ fn save_shared_assets(contents: String) -> Result<String, String> {
 }
 
 /// 解析内置 ffmpeg 二进制路径：优先 resources 目录，回退到 exe 同级目录。
-/// Windows 使用 ffmpeg.exe，macOS/Linux 使用 ffmpeg。
 fn ffmpeg_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    #[cfg(target_os = "windows")]
-    let bin = "ffmpeg.exe";
-    #[cfg(not(target_os = "windows"))]
-    let bin = "ffmpeg";
     let mut cands: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(res) = app.path().resource_dir() {
-        cands.push(res.join(bin));
+        cands.push(res.join("ffmpeg.exe"));
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            cands.push(parent.join(bin));
+            cands.push(parent.join("ffmpeg.exe"));
         }
     }
     for p in cands {
@@ -53,7 +48,7 @@ fn ffmpeg_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
             return Ok(p);
         }
     }
-    Err(format!("找不到内置 ffmpeg 二进制（{bin}）"))
+    Err("找不到内置 ffmpeg 二进制（ffmpeg.exe）".into())
 }
 
 /// 把前端本地录制的 webm 经内置 ffmpeg 转码为 MP4(H.264/AAC, 无音轨则 -an)，保存到用户目录。
@@ -230,6 +225,136 @@ fn srt_ts(s: f64) -> String {
     let sec = (total_ms % 60_000) / 1000;
     let ms = total_ms % 1000;
     format!("{:02}:{:02}:{:02},{:03}", h, m, sec, ms)
+}
+
+/// ASS 时间格式：H:MM:SS.CC（百分秒）
+fn ass_ts(s: f64) -> String {
+    let total_cs = (s * 100.0).round() as i64;
+    let h = total_cs / 360_000;
+    let m = (total_cs % 360_000) / 6_000;
+    let sec = (total_cs % 6_000) / 100;
+    let cs = total_cs % 100;
+    format!("{}:{:02}:{:02}.{:02}", h, m, sec, cs)
+}
+
+/// #RRGGBB -> ASS 主色 &H00BBGGRR
+fn ass_color(hex: &str) -> String {
+    let h = hex.trim_start_matches('#');
+    let (r, g, b) = if h.len() >= 6 {
+        (
+            u32::from_str_radix(&h[0..2], 16).unwrap_or(255),
+            u32::from_str_radix(&h[2..4], 16).unwrap_or(255),
+            u32::from_str_radix(&h[4..6], 16).unwrap_or(255),
+        )
+    } else {
+        (255, 255, 255)
+    };
+    format!("&H00{:02X}{:02X}{:02X}", b, g, r)
+}
+
+fn parse_hex(hex: &str) -> (u32, u32, u32) {
+    let h = hex.trim_start_matches('#');
+    if h.len() >= 6 {
+        (
+            u32::from_str_radix(&h[0..2], 16).unwrap_or(0),
+            u32::from_str_radix(&h[2..4], 16).unwrap_or(0),
+            u32::from_str_radix(&h[4..6], 16).unwrap_or(0),
+        )
+    } else {
+        (0, 0, 0)
+    }
+}
+
+/// 位置 + 水平对齐 -> ASS Alignment（1-9）
+fn ass_align(pos: &str, halign: &str) -> u32 {
+    match (pos, halign) {
+        ("top", "left") => 7,
+        ("top", "right") => 9,
+        ("top", _) => 8,
+        ("middle", "left") => 4,
+        ("middle", "right") => 6,
+        ("middle", _) => 5,
+        (_, "left") => 1,
+        (_, "right") => 3,
+        _ => 2,
+    }
+}
+
+/// 文本轨 -> ASS 字幕文件（带字体/字号/颜色/粗体/背景框/位置样式）
+fn build_ass(texts: &[TlTextClip], w: u32, h: u32) -> String {
+    let mut events = String::new();
+    let mut styles: Vec<(u32, String, String)> = Vec::new(); // (opacity, bg_hex, style_name)
+    let mut box_n = 0usize;
+    let mut any = false;
+    for t in texts {
+        let tx = t.text.trim();
+        if tx.is_empty() {
+            continue;
+        }
+        any = true;
+        let st = t.start.max(0.0);
+        let en = (t.start + t.duration.max(0.3)).max(st + 0.3);
+        let size = t.font_size.unwrap_or(20).clamp(8, 300);
+        let op = t.bg_opacity.unwrap_or(70).min(100);
+        let align = ass_align(
+            t.position.as_deref().unwrap_or("bottom"),
+            t.h_align.as_deref().unwrap_or("center"),
+        );
+        let fam = t.font_family.as_deref().unwrap_or("").trim();
+        let fname = if fam.is_empty() {
+            "Microsoft YaHei".to_string()
+        } else {
+            fam.to_string()
+        };
+        let bg_hex = t.bg_color.as_deref().unwrap_or("#000000").to_string();
+        let style_name = if op > 0 {
+            match styles.iter().find(|(o, c, _)| *o == op && c == &bg_hex) {
+                Some((_, _, n)) => n.clone(),
+                None => {
+                    box_n += 1;
+                    let n = format!("Box{}", box_n);
+                    styles.push((op, bg_hex.clone(), n.clone()));
+                    n
+                }
+            }
+        } else {
+            "Normal".to_string()
+        };
+        let bold = if t.bold.unwrap_or(false) { -1 } else { 0 };
+        events += &format!(
+            "Dialogue: 0,{},{},{},,0,0,0,,{{\\an{}\\fn{}\\fs{}\\c{}\\b{}}}{}\n",
+            ass_ts(st),
+            ass_ts(en),
+            style_name,
+            align,
+            fname,
+            size,
+            ass_color(t.color.as_deref().unwrap_or("#ffffff")),
+            bold,
+            tx.replace('\n', "\\N")
+        );
+    }
+    if !any {
+        return String::new();
+    }
+    let mut ass = String::new();
+    ass += "[Script Info]\nScriptType: v4.00+\n";
+    ass += &format!("PlayResX: {}\nPlayResY: {}\n", w, h);
+    ass += "ScaledBorderAndShadow: yes\nWrapStyle: 0\n\n";
+    ass += "[V4+ Styles]\n";
+    ass += "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n";
+    ass += "Style: Normal,Microsoft YaHei,20,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,1,2,10,10,10,1\n";
+    for (op, bg_hex, name) in &styles {
+        let (r, g, b) = parse_hex(bg_hex);
+        let alpha = (255.0 * (1.0 - *op as f64 / 100.0)).round() as u32;
+        ass += &format!(
+            "Style: {},Microsoft YaHei,20,&H00FFFFFF,&H00FFFFFF,&H00000000,&H{:02X}{:02X}{:02X}{:02X},0,0,0,0,100,100,0,0,3,0,0,2,10,10,10,1\n",
+            name, alpha, b, g, r
+        );
+    }
+    ass += "\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
+    ass += &events;
+    ass
 }
 
 fn build_srt(clips: &[ClipIn]) -> String {
@@ -411,10 +536,19 @@ struct TlAudioClip {
 }
 
 #[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TlTextClip {
     #[serde(default)] start: f64,
     #[serde(default)] duration: f64,
     #[serde(default)] text: String,
+    #[serde(default)] font_size: Option<u32>,
+    #[serde(default)] color: Option<String>,
+    #[serde(default)] position: Option<String>,
+    #[serde(default)] h_align: Option<String>,
+    #[serde(default)] font_family: Option<String>,
+    #[serde(default)] bold: Option<bool>,
+    #[serde(default)] bg_color: Option<String>,
+    #[serde(default)] bg_opacity: Option<u32>,
 }
 
 /// 视频轨：纯色背景画布 + 逐段按时间线位置 overlay（变速/调色/淡入转场/字幕烧录）
@@ -473,7 +607,7 @@ pad={}:{}:(ow-iw)/2:(oh-ih)/2:color={},setsar=1,fps={}",
     let video_map = if use_sub {
         // 必须显式带上一段输出的 label；否则 filter_complex 会把 subtitles 挂到
         // 第一个未使用的输入流上，画面和字幕对不上且大概率报错。
-        vf += &format!("[{}]subtitles=et_sub.srt[vburn];", cur);
+        vf += &format!("[{}]subtitles=et_sub.ass[vburn];", cur);
         "[vburn]".to_string()
     } else {
         format!("[{}]", cur)
@@ -664,28 +798,11 @@ fn export_timeline(
             .map_err(|e| format!("写音频片段 {} 失败: {}", j, e))?;
     }
 
-    // 文本轨 → SRT
-    let mut srt = String::new();
-    let mut sub_idx = 1;
-    for t in texts.iter() {
-        let tx = t.text.trim();
-        if tx.is_empty() {
-            continue;
-        }
-        let st = t.start.max(0.0);
-        let en = (t.start + t.duration.max(0.3)).max(st + 0.3);
-        srt += &format!(
-            "{}\n{} --> {}\n{}\n\n",
-            sub_idx,
-            srt_ts(st),
-            srt_ts(en),
-            tx.replace('\n', " ")
-        );
-        sub_idx += 1;
-    }
-    let use_sub = sub_idx > 1;
+    // 文本轨 → ASS（带字体/颜色/背景框/位置样式）
+    let ass = build_ass(&texts, w, h);
+    let use_sub = !ass.is_empty();
     if use_sub {
-        std::fs::write(tmp.join("et_sub.srt"), &srt)
+        std::fs::write(tmp.join("et_sub.ass"), &ass)
             .map_err(|e| format!("写字幕失败: {}", e))?;
     }
 

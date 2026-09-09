@@ -1,10 +1,11 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { api, generateImage } from "../../dispatch-jobs.js";
 import { isLoggedIn, precheckCredits, deductCredits, getCreditBalance } from "../../utils/backend-api.js";
 import { getPrice } from "../../utils/pricing-utils.js";
 
 // 生图风格选项
 const STYLE_OPTIONS = [
+  { value: "wuxia", label: "武侠玄幻", desc: "武侠玄幻风格，东方古风美学，江湖意境，写实细腻光影" },
   { value: "cinematic", label: "电影级写实", desc: "电影级写实风格，胶片质感，专业光影，高对比度" },
   { value: "anime", label: "动漫风格", desc: "动漫风格，色彩鲜艳，表情生动，日式动画美学" },
   { value: "realistic", label: "超写实", desc: "超写实照片风格，真实皮肤质感，自然光影，极致细节" },
@@ -15,11 +16,100 @@ const STYLE_OPTIONS = [
   { value: "comedy", label: "喜剧风格", desc: "喜剧风格，明亮色彩，欢快氛围，夸张表情" },
 ];
 
+// 通用画质层（所有角色通用）
+const QUALITY_LAYER = "8K超高清，专业角色设定图，电影级三点布光，柔光箱主光，轮廓光分离主体与背景，全局光照GI，环境光遮蔽AO，次表面散射SSS，锐利细节，干净背景，正交视图";
+
+// 类型适配层（根据角色类型自动切换）
+function getTypeLayer(appearance, role, name) {
+  const text = (appearance + role + name).toLowerCase();
+  const beastKeywords = ["兽", "妖", "怪", "龙", "虎", "狼", "狐", "鸟", "鱼", "虫", "兽首", "兽人", "妖兽", "怪物", "精", "灵", "魔"];
+  const isBeast = beastKeywords.some(k => text.includes(k));
+  if (isBeast) {
+    return "毛发根根分明，兽类面部结构准确，瞳孔细节，爪子/蹄子/犄角细节，毛皮/鳞片纹理，生物结构合理";
+  }
+  return "皮肤毛孔级质感，发丝级细节，服装织物纹理，金属配饰反光，妆容精致";
+}
+
+// 通用负面提示词
+const NEGATIVE_PROMPT = "模糊，低分辨率，变形，塑料感，蜡像感，过度磨皮，卡通，油画，AI感，多余肢体，结构错误，手指畸形";
+
+// 从剧本内容识别默认风格（旧项目无 styleKey 时兜底；未识别返回空串）
+export function detectStyleKey(text) {
+  const st = (text || "").slice(0, 3000);
+  if (/(科幻|星际|未来|机甲|赛博|末世|外太空)/.test(st)) return "cyberpunk";
+  if (/(玄幻|修仙|仙侠|修真|武侠|江湖|武林|门派|侠客|剑客|古风|朝堂|帝王|将军|盟主)/.test(st)) return "wuxia";
+  if (/(现代|都市|职场|校园|豪门|总裁|医院)/.test(st)) return "realistic";
+  if (/(民国|军阀|旗袍|租界)/.test(st)) return "noir";
+  return "";
+}
+
+// 基础提示词（不含风格描述，供剧本分析/细化/存储使用，生成图片时再注入风格）
+export function buildCharacterBasePrompt(char) {
+  const appearance = char.appearance || "";
+  const personality = char.personality || "";
+  const role = char.role || "";
+  const genderHint = /(男主|先生|总裁|少爷|哥哥|弟弟|父亲|儿子|男|他)/.test(role + char.name + personality) ? "男性" :
+                     /(女主|小姐|夫人|公主|姐姐|妹妹|母亲|女儿|女|她)/.test(role + char.name + personality) ? "女性" : "";
+  const typeLayer = getTypeLayer(appearance, role, char.name);
+  return `角色设定三视图加面部特写，${char.name}${genderHint ? "，" + genderHint : ""}，${role}，${appearance}，性格气质：${personality}。画面布局：上排并排展示同一角色三个全身视角——正面视图、侧面视图、背面视图；下排中央展示该角色上半身面部特写（胸部以上）。所有视图和特写中角色外貌完全一致：相同面部五官/头部结构、发型发色、服装款式与颜色、配饰、体型肤色，严格保持角色一致性。全身像自然站立姿势，双臂自然下垂，双脚与肩同宽。面部特写表情自然正视镜头，五官/头部细节清晰。纯白色无背景，无阴影，无环境元素，纯净角色设定图。${QUALITY_LAYER}，${typeLayer}，四个画面外貌完全统一。注意：此角色为「${char.name}」，请根据其身份「${role}」和性格「${personality}」生成独特的外貌和服装，不要与其他角色混淆。负面提示：${NEGATIVE_PROMPT}`;
+}
+
+// 完整提示词 = 基础提示词 + 风格描述（生成人物图片时使用）
+export function buildCharacterPrompt(char, styleValue) {
+  const styleObj = STYLE_OPTIONS.find(s => s.value === styleValue) || STYLE_OPTIONS[0];
+  return `${buildCharacterBasePrompt(char)}${styleObj.desc}。`;
+}
+
+// 生成图片时向已有提示词注入风格描述（插在"负面提示"之前；已含则不重复）
+export function injectStyleDesc(p, styleDesc) {
+  if (!styleDesc) return p;
+  if (p && p.includes(styleDesc)) return p;
+  const idx = (p || "").indexOf("负面提示");
+  if (idx > -1) return p.slice(0, idx) + styleDesc + "。" + p.slice(idx);
+  return p + "。" + styleDesc;
+}
+
 export function CharacterManager({ project, update, log }) {
   const characters = project.materials?.characters || [];
+
+  // 自愈：旧版本数据修复——提示词串名（含其他角色名且不含自己）自动重建；缺失 id 自动补
+  useEffect(() => {
+    const chars = project.materials?.characters || [];
+    if (!chars.length) return;
+    const names = chars.map(c => c.name).filter(Boolean);
+    const hasSelf = (prompt, nm) => !nm || (prompt && prompt.includes(nm));
+    let dirty = false;
+    const fixed = chars.map(ch => {
+      let out = ch;
+      if (!out.id) { dirty = true; out = { ...out, id: "char_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8) }; }
+      if (out.appearance && out.name && new RegExp("^" + out.name + "[（(]").test(out.appearance)) { dirty = true; out = { ...out, appearance: "" }; }
+      if (out.promptCn && names.some(nm => nm && nm !== out.name && out.promptCn.includes(nm)) && !hasSelf(out.promptCn, out.name)) {
+        dirty = true; out = { ...out, promptCn: buildCharacterBasePrompt(out) };
+      }
+      return out;
+    });
+    // 风格兜底：旧项目无 styleKey 时按剧本内容自动识别
+    if (!project.styleKey) {
+      const sk = detectStyleKey(project.script || project.outline?.synopsis || "");
+      if (sk && STYLE_OPTIONS.some(s => s.value === sk)) {
+        try { update({ styleKey: sk }); } catch (e) {}
+        setSelectedStyle(sk);
+      }
+    }
+    if (dirty) {
+      try { update({ materials: { ...project.materials, characters: fixed } }); } catch (e) {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [generatingCharIds, setGeneratingCharIds] = useState({}); // {charId: true} 支持多个人物同时生成
+  const [refiningCharId, setRefiningCharId] = useState(""); // 正在细化提示词的角色
   const [previewImage, setPreviewImage] = useState(null);
-  const [selectedStyle, setSelectedStyle] = useState("anime");
+  const [selectedStyle, setSelectedStyle] = useState(() => {
+    const k = project.styleKey;
+    if (STYLE_OPTIONS.some(s => s.value === k)) return k;
+    return detectStyleKey(project.script || project.outline?.synopsis || "") || STYLE_OPTIONS[0].value;
+  });
   const [showAddModal, setShowAddModal] = useState(false);
   const [newChar, setNewChar] = useState({ name: "", role: "", personality: "", appearance: "" });
 
@@ -95,15 +185,20 @@ ${content.slice(0, 5000)}
         parsed = { characters: [] };
       }
 
-      const newCharacters = (parsed.characters || []).map((c, i) => ({
-        id: `char_${Date.now()}_${i}`,
-        name: c.name || `角色${i + 1}`,
-        role: c.role || "",
-        personality: c.personality || "",
-        appearance: c.appearance || "",
-        image: null,
-        locked: false
-      }));
+      const newCharacters = (parsed.characters || []).map((c, i) => {
+        const char = {
+          id: `char_${Date.now()}_${i}`,
+          name: c.name || `角色${i + 1}`,
+          role: c.role || "",
+          personality: c.personality || "",
+          appearance: c.appearance || "",
+          image: null,
+          locked: false
+        };
+        // 剧本分析完立即生成提示词（基础版，不含风格描述），用户可在生成前修改；生成图片时再按所选风格注入
+        char.promptCn = buildCharacterBasePrompt(char);
+        return char;
+      });
 
       // 合并现有角色和新提取的角色
       const existingNames = new Set(characters.map(c => c.name));
@@ -135,6 +230,63 @@ ${content.slice(0, 5000)}
     }
   };
 
+  // AI细化人物提示词（整体穿着/面容细节/头发细节等）
+  const refineCharacterPrompt = async (char) => {
+    if (refiningCharId) return;
+    if (!isLoggedIn()) { alert("请先登录后再使用提示词细化"); return; }
+    const price = getPrice("llm_character_refine", 1.0);
+    try {
+      const precheck = await precheckCredits(price, "text", `细化人物提示词：${char.name}`);
+      if (!precheck.sufficient && precheck.sufficient !== undefined) {
+        log(`❌ 积分不足：需要${price}积分，当前余额${precheck.balance || 0}积分`);
+        alert(`积分不足！提示词细化需要${price}积分，当前余额${precheck.balance || 0}积分。请充值后再试。`);
+        return;
+      }
+    } catch (e) {
+      log(`⚠️ 积分预校验失败：${e.message}`);
+    }
+    setRefiningCharId(char.id);
+    log(`正在细化「${char.name}」人物提示词...`);
+    try {
+      const current = (char.promptCn || buildCharacterBasePrompt(char)).trim();
+      const prompt = `你是专业的AI生图提示词工程师。请细化以下角色设定图的生图提示词，使其更精致、细节更丰富，可直接用于AI生图。
+细化方向（必须逐项加强细节）：
+1. 整体穿着：服装款式、颜色、面料材质、纹理纹样、层次搭配、腰带/玉佩/披风/护腕等配饰；
+2. 面容细节：脸型、眉眼、鼻梁、嘴唇、肤色肤质、五官比例、神情气质；
+3. 头发细节：发型、发长、发色、刘海/发髻/发冠/发饰；
+4. 体型与随身道具。
+要求：
+1. 完整保留原提示词中"三视图加面部特写"的画面布局结构和角色外貌设定，只增强角色外貌细节；
+2. 不要包含任何风格/画风描述（如动漫、写实、武侠、奇幻等），风格由生成时统一注入；
+3. 150-260字；
+4. 只输出细化后的完整提示词本身，不要解释、不要markdown代码块。
+
+角色：${char.name}（${char.role || "未知身份"}）
+当前提示词：${current}`;
+      const res = await api("/api/llm/chat", {
+        method: "POST",
+        body: JSON.stringify({ messages: [{ role: "user", content: prompt }], max_tokens: 512 }),
+      });
+      const text = (res.text || "").trim();
+      if (!text) throw new Error("LLM未返回内容");
+      update(prev => {
+        const allChars = prev.materials?.characters || [];
+        const newChars = allChars.map(x => x.id === char.id ? { ...x, promptCn: text } : x);
+        return { materials: { ...prev.materials, characters: newChars } };
+      });
+      log(`✅ 「${char.name}」提示词已细化（${text.length}字符）`);
+      try {
+        const balanceData = await getCreditBalance();
+        if (window.onCreditUpdate) window.onCreditUpdate(balanceData.balance || balanceData.credits || 0);
+        if (window.refreshUserInfo) window.refreshUserInfo();
+      } catch (e) {}
+    } catch (err) {
+      log(`❌ 提示词细化失败：${err.message}`);
+    } finally {
+      setRefiningCharId("");
+    }
+  };
+
   // AI根据人物描述生成参考图
   const generateCharacterImage = async (char) => {
     if (generatingCharIds[char.id]) return; // 该人物正在生成中，忽略重复点击
@@ -160,16 +312,11 @@ ${content.slice(0, 5000)}
     }
     log(`正在为「${char.name}」生成人物参考图...`);
     try {
-      const appearance = char.appearance || "";
-      const personality = char.personality || "";
-      const role = char.role || "";
-      // 根据角色信息推断性别和风格，增加辨识度
-      const genderHint = /(男主|先生|总裁|少爷|哥哥|弟弟|父亲|儿子|男|他)/.test(role + char.name + personality) ? "男性" :
-                         /(女主|小姐|夫人|公主|姐姐|妹妹|母亲|女儿|女|她)/.test(role + char.name + personality) ? "女性" : "";
       const styleObj = STYLE_OPTIONS.find(s => s.value === selectedStyle) || STYLE_OPTIONS[0];
-      const styleDesc = styleObj.desc;
-      const defaultPrompt = `角色设定三视图，${char.name}，${genderHint}，${role}，${appearance}，性格气质：${personality}。同一角色的三个视角并排展示：正面视图、侧面视图（左侧）、背面视图。全身像，自然站立姿势，双臂自然下垂，双脚与肩同宽。纯白色无背景背景，无阴影，无环境元素，纯净角色设定图。超高清细节，8K分辨率，服装纹理清晰，发型准确，体型一致，三个视角外貌完全统一。${styleDesc}。注意：此角色为「${char.name}」，请根据其身份「${role}」和性格「${personality}」生成独特的外貌和服装，不要与其他角色混淆。`;
-      const prompt = (char.promptCn && char.promptCn.trim().length > 0) ? char.promptCn.trim() : defaultPrompt;
+      // 基础提示词 = 用户已有提示词（分析/细化版，不含风格）；没有则用通用三层结构
+      const basePrompt = (char.promptCn && char.promptCn.trim().length > 0) ? char.promptCn.trim() : buildCharacterBasePrompt(char);
+      // 生成时注入所选风格描述
+      const prompt = injectStyleDesc(basePrompt, styleObj.desc);
       const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1328x1328", n: 1 });
       const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
       if (!imageUrl) throw new Error("未返回图片地址");
@@ -179,9 +326,10 @@ ${content.slice(0, 5000)}
         const allChars = prev.materials?.characters || [];
         console.log("[人物生成] 当前人物列表:", allChars.map(c => ({id: c.id, name: c.name, hasImage: !!c.image})));
         const newChars = allChars.map(x => {
-          if (x.id === char.id) {
+          const matched = (x.id && char.id) ? (x.id === char.id) : (x.name === char.name);
+          if (matched) {
             console.log("[人物生成] 匹配到人物:", x.name, "，更新图片");
-            return { ...x, image: imageUrl, promptCn: prompt };
+            return { ...x, image: imageUrl, promptCn: basePrompt };
           }
           return x;
         });
@@ -285,7 +433,7 @@ ${content.slice(0, 5000)}
                 const allChars = prev.materials?.characters || [];
                 return { materials: { ...prev.materials, characters: allChars.map(x => x.id === c.id ? { ...x, promptCn: e.target.value } : x) } };
               })}
-              placeholder="AI生成后提示词会显示在这里，可修改后再次生成"
+              placeholder="提示词已自动生成，可修改后点击生成"
             />
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
               <button
@@ -325,17 +473,11 @@ ${content.slice(0, 5000)}
                 📷 上传图片
               </button>
               <button
-                style={{ flex: 1, padding: "4px 0", border: "1px solid var(--border)", borderRadius: 4, background: "transparent", color: "var(--text)", fontSize: 11, cursor: "pointer" }}
-                onClick={() => {
-                  const url = window.prompt("或通过 URL 设置角色图片：");
-                  if (url) update(prev => {
-                    const allChars = prev.materials?.characters || [];
-                    const newChars = allChars.map(x => x.id === c.id ? { ...x, image: url } : x);
-                    return { materials: { ...prev.materials, characters: newChars } };
-                  });
-                }}
+                style={{ flex: 1, padding: "4px 0", border: "1px solid var(--border)", borderRadius: 4, background: refiningCharId === c.id ? "rgba(122,92,255,0.3)" : "transparent", color: refiningCharId === c.id ? "#7A5CFF" : "var(--text)", fontSize: 11, cursor: "pointer" }}
+                onClick={() => refineCharacterPrompt(c)}
+                disabled={!!refiningCharId}
               >
-                🔗 URL 图片
+                ✨ 细化提示词
               </button>
               <button
                 style={{ flex: 1, padding: "4px 0", border: "1px solid var(--border)", borderRadius: 4, background: c.locked ? "rgba(122,92,255,0.3)" : "transparent", color: c.locked ? "#7A5CFF" : "var(--text)", fontSize: 11, cursor: "pointer" }} 
@@ -438,6 +580,7 @@ ${content.slice(0, 5000)}
                     image: null, 
                     locked: false 
                   };
+                  c.promptCn = buildCharacterBasePrompt(c);
                   update({ materials: { ...project.materials, characters: [c, ...characters] } });
                   log("新增角色：" + c.name);
                   setShowAddModal(false);

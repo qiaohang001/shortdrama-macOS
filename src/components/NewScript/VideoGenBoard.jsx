@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { downloadUrl, saveBlob } from "../../utils.js";
-import { runDispatchJob, api } from "../../dispatch-jobs.js";
+import { runDispatchJob, api, generateImage, extractTail, concatVideos } from "../../dispatch-jobs.js";
 import { isLoggedIn, precheckCredits, getCreditBalance } from "../../utils/backend-api.js";
 import { getAppSetting, saveAppSetting } from "../../utils/app-settings.js";
-import { calcVideoPrice } from "../../utils/pricing-utils.js";
+import { calcVideoPrice, getPrice } from "../../utils/pricing-utils.js";
 
 const VIDEO_MODES = [
   { key: "i2v", label: "图生视频 (I2V)", desc: "角色参考图驱动，人物外貌一致，模型自由发挥画面" },
+  { key: "s2v", label: "人物+场景参考", desc: "人物+场景参考图驱动，不依赖首帧，人物外貌与场景一致" },
   { key: "r2v", label: "首尾帧 (R2V/lightx2v)", desc: "首帧+尾帧精确控制画面起止，minimax_h3_lightx2v工作流" },
   { key: "ia2v", label: "全能参考 (Ref2VA/v2)", desc: "参考图片+参考音频+文本，最多9图3音，minimax_h3_image_audio_to_video_v2工作流" },
   { key: "t2v", label: "文生视频 (T2V)", desc: "纯文字描述生成，自由度最高" },
@@ -15,18 +16,18 @@ const VIDEO_MODES = [
 // 各渠道支持的生成模式（万相不支持尾帧R2V，可灵不支持参考音频全能参考）
 const PROV_MODES = {
   autodl: ["i2v", "r2v", "ia2v", "t2v"],
-  wan27: ["i2v"],
-  kling: ["i2v"],
+  wan22: ["i2v", "s2v"],
+  kling: ["i2v", "s2v"],
 };
 const getVideoModes = (provider) => {
   const keys = PROV_MODES[provider] || PROV_MODES.autodl;
   return VIDEO_MODES.filter(m => keys.includes(m.key));
 };
 
-// 视频生成渠道（provider）：AutoDL托管 / 百炼万相2.7 / 百炼可灵3.0
+// 视频生成渠道（provider）：AutoDL托管 / 自部署Wan2.2高级 / 百炼可灵3.0顶级
 const VIDEO_PROVIDERS = [
   { key: "autodl", label: "标准生成", desc: "低配托管，1-3积分/秒" },
-  { key: "wan27", label: "高级生成", desc: "高画质参考生视频，4-8积分/秒" },
+  { key: "wan22", label: "高级生成", desc: "自部署 MiniMax H3，720P=5/1080P=6积分/秒" },
   { key: "kling", label: "顶级生成", desc: "旗舰高动态画质，5-9积分/秒" },
 ];
 
@@ -59,26 +60,42 @@ const RESOLUTIONS_BASIC = [
 ];
 
 // 根据模式获取可用分辨率（万相/可灵渠道不支持480P，自动隐藏）
+// wan22（自部署 MiniMax H3）：H3 原生 720p/1080p 档位 + 576p 兼容
+const RESOLUTIONS_WAN22 = [
+  { key: "1080p横", label: "1080P 横屏（16:9）" },
+  { key: "1080p竖", label: "1080P 竖屏（9:16）" },
+  { key: "720p横", label: "720P 横屏（16:9）" },
+  { key: "720p竖", label: "720P 竖屏（9:16）" },
+  { key: "576p竖", label: "576P 竖屏（9:16）" },
+  { key: "576p横", label: "576P 横屏（16:9）" },
+];
 const getResolutions = (mode, provider) => {
+  if (provider === "wan22") return RESOLUTIONS_WAN22;
   let list;
-  if (mode === "i2v") list = RESOLUTIONS_I2V;
+  if (mode === "i2v" || mode === "s2v") list = RESOLUTIONS_I2V;
   else if (mode === "ia2v") list = RESOLUTIONS_IA2V;
   else list = RESOLUTIONS_BASIC;
-  if (provider === "wan27" || provider === "kling") {
+  if (provider === "kling") {
     list = list.filter(r => !r.key.includes("480"));
   }
   return list;
 };
 
-// 根据模式获取可用时长（I2V/IA2V=1-10秒，R2V/T2V=1-15秒）
-const getDurations = (mode) => {
-  if (mode === "i2v" || mode === "ia2v") return DURATIONS.filter(d => d.key <= 10);
-  return DURATIONS;
+// 根据模式获取可用时长（I2V/S2V/IA2V=1-10秒，R2V/T2V=1-15秒；高级生成Wan2.2的I2V支持30/60秒长视频分段续接）
+const getDurations = (mode, provider) => {
+  let list = DURATIONS.filter(d => d.key <= (mode === "i2v" || mode === "ia2v" || mode === "s2v" ? 10 : 15));
+  if (provider === "wan22" && mode === "i2v") {
+    list = list.concat([
+      { key: 30, label: "30秒（长视频）" },
+      { key: 60, label: "60秒（长视频）" },
+    ]);
+  }
+  return list;
 };
 
 // 根据模式获取最大时长
 const getMaxDuration = (mode) => {
-  return (mode === "i2v" || mode === "ia2v") ? 10 : 15;
+  return (mode === "i2v" || mode === "ia2v" || mode === "s2v") ? 10 : 15;
 };
 
 const DURATIONS = [
@@ -103,6 +120,8 @@ const I2V_WORKFLOW_ID = "minimax_h3_lightx2v_v5";
 const R2V_WORKFLOW_ID = "minimax_h3_lightx2v";
 const IA2V_WORKFLOW_ID = "minimax_h3_image_audio_to_video_v2";
 const T2V_WORKFLOW_ID = "minimax_h3_lightx2v_no_pic";
+const WAN22_WORKFLOW_ID = "wan22_vace_fun_a14b"; // 自部署 Wan2.2-VACE-Fun-A14B
+const KLING_WORKFLOW_ID = "kling_v3_omni"; // 阿里云百炼可灵 v3-omni
 
 // 视频风格选项
 const VIDEO_STYLES = [
@@ -117,7 +136,82 @@ const VIDEO_STYLES = [
 ];
 
 // 视频生成提示词固定后缀（所有模式都加入）
-const PROMPT_FIXED_SUFFIX = "连续运镜，电影级3D短剧视觉，动态光影，画面流畅自然，超高清画质，锐利细节，所有人物清晰可见，主角和配角同等清晰度，无角色虚化，场景细节丰富，所有环境元素清晰可见，无背景虚化，景深适中，全员入镜，无可见拍摄设备，一镜到底感。专业影视级画面。";
+const PROMPT_FIXED_SUFFIX = "专业影视级，高清细节，画面流畅";
+
+// 专业运镜库（每种带精确参数描述）
+const CAMERA_MOVES = {
+  static: { name: "固定镜头", desc: "固定镜头，机位不动，画面稳定无晃动，客观冷静视角，适合对话、沉思、强调时刻" },
+  push_in: { name: "缓慢推近", desc: "缓慢匀速推近镜头，从远景过渡到中景或特写，聚焦主体面部，制造紧张感或情绪强调，速度平稳无顿挫" },
+  pull_out: { name: "缓慢拉远", desc: "缓慢匀速拉远镜头，从特写/中景过渡到远景，揭示环境空间，制造孤独感、结束感或宏大感" },
+  pan: { name: "水平横摇", desc: "镜头原地水平左右摇动，展示环境空间或跟随横向运动，速度平稳流畅，无剧烈晃动" },
+  follow: { name: "跟随跟拍", desc: "镜头跟随主体同步移动，与主体保持固定距离，画面中心始终锁定主体，代入感强，适合行走、赶路场景" },
+  handheld: { name: "手持跟拍", desc: "手持镜头自然轻微晃动，纪实感强，追逐打斗场景用急促小幅度晃动增强紧张感，镜头距主体1.5-2米" },
+  crane: { name: "升降镜头", desc: "镜头垂直方向缓慢升降，从低机位升到高机位或反之，展示宏大场面或视角转换，运动轨迹平滑" },
+  orbit: { name: "环绕镜头", desc: "镜头围绕主体缓慢环绕半圈到一圈，360度展示人物或物体，强调主体重要性，速度均匀" },
+  whip_pan: { name: "快速甩镜", desc: "快速水平摇动镜头，画面产生运动模糊拖影，用于急促转场或动作切换，制造强烈节奏感" },
+  low_angle: { name: "低机位仰拍", desc: "低角度仰拍主体，主体显得高大有压迫感，适合反派登场、力量展示、气势营造" },
+  top_down: { name: "俯拍上帝视角", desc: "高角度垂直俯拍，展示全局空间布局，适合场面调度、孤独感、战场全景" }
+};
+
+// 情绪→运镜自动映射（关键词匹配）
+const EMOTION_CAMERA_MAP = [
+  { keywords: ["紧张", "追逐", "打斗", "激烈", "危急", "逃跑", "追杀", "搏斗"], camera: "handheld", reason: "手持跟拍制造紧张代入感" },
+  { keywords: ["悲伤", "孤独", "失落", "绝望", "哭泣", "落寞", "凄凉"], camera: "pull_out", reason: "缓拉揭示孤独环境" },
+  { keywords: ["震撼", "宏大", "壮观", "登场", "气势", "霸气", "威严"], camera: "crane", reason: "升降镜头展示宏大场面" },
+  { keywords: ["温馨", "浪漫", "亲密", "温柔", "甜蜜", "暧昧"], camera: "orbit", reason: "环绕镜头营造温柔氛围" },
+  { keywords: ["悬疑", "神秘", "诡异", "惊悚", "恐惧", "压迫", "不安"], camera: "push_in", reason: "缓慢推近制造压迫感" },
+  { keywords: ["对话", "沉思", "平静", "日常", "叙述", "回忆"], camera: "static", reason: "固定镜头保持客观稳定" },
+  { keywords: ["愤怒", "爆发", "冲突", "争吵", "怒吼", "摔砸"], camera: "whip_pan", reason: "甩镜制造急促冲突感" },
+  { keywords: ["行走", "赶路", "旅行", "移动", "奔跑", "前行"], camera: "follow", reason: "跟随跟拍保持运动感" },
+  { keywords: ["反派", "霸气", "压迫", "高高在上", "藐视"], camera: "low_angle", reason: "低机位仰拍增强压迫感" }
+];
+
+// 根据分镜内容自动推荐运镜
+function recommendCamera(desc, title, dialogue) {
+  const text = (desc + title + dialogue).toLowerCase();
+  for (const m of EMOTION_CAMERA_MAP) {
+    if (m.keywords.some(k => text.includes(k))) {
+      return { ...CAMERA_MOVES[m.camera], key: m.camera, reason: m.reason };
+    }
+  }
+  return { ...CAMERA_MOVES.static, key: "static", reason: "默认固定镜头保持稳定" };
+}
+
+// AI细化提示词 - 镜头分类模板库（按镜头功能分类，每类有专属细化要点；auto=自动识别）
+const REFINE_TEMPLATES = [
+  {
+    key: "auto", label: "自动识别",
+    guide: "请先判断本分镜的镜头功能类型（从特效/打斗/文戏/氛围/惊悚/运镜/场景中选取最匹配的一类），再用该类专属要点进行细化。"
+  },
+  {
+    key: "vfx", label: "特效类",
+    guide: "特效类细化要点：重点描绘能量/法术/技能释放全过程（能量颜色、粒子密度与轨迹、释放方向与源点）；元素材质与物理反馈（火焰/冰霜/雷电/光效的质感层次）；受击对象的视觉反应（碎裂、飞溅、震动）；光效与环境的相互作用（照亮、染色、投射阴影）；特效节奏与镜头配合（爆发瞬间、余波消散）。"
+  },
+  {
+    key: "fight", label: "打斗类",
+    guide: "打斗类细化要点：动作连贯性与逻辑（攻防转换、重心变化、发力瞬间）；打击感（接触瞬间的顿挫、速度拖影、衣袂与发丝随动）；双方姿态与距离感（近身缠斗/拉开距离）；节奏张力（快慢交替、蓄力到爆发）；环境互动（踩踏扬尘、震碎地面、墙面裂纹）。"
+  },
+  {
+    key: "drama", label: "文戏类",
+    guide: "文戏类细化要点：面部微表情与眼神（情绪层次、嘴角与眉梢细节）；台词节奏与情绪；双人对位构图（站位关系、视线方向）；肢体小动作（手部特写、无意识动作）；情感氛围（克制或爆发、留白感）。"
+  },
+  {
+    key: "ambience", label: "氛围类",
+    guide: "氛围类细化要点：光影色调主导情绪（冷/暖、明/暗、色温）；环境质感细节（雾气、尘埃、水汽、光斑）；空间纵深感与层次（前景-主体-背景）；时间感（晨昏/雨雪/风）；整体基调统一（压抑/温暖/空旷/拥挤）。"
+  },
+  {
+    key: "horror", label: "惊悚类",
+    guide: "惊悚类细化要点：压迫感构图（低机位、过肩、挤压空间）；暗部细节与受限光源（单一光源、忽明忽暗）；悬念元素（遮挡、背影、若隐若现）；镜头呼吸感与缓慢推进；心理紧张暗示（环境反常、安静中的细微声响感）。"
+  },
+  {
+    key: "camera", label: "运镜类",
+    guide: "运镜类细化要点：镜头运动方式明确（推/拉/摇/移/跟/环绕/升降）；运动速度与节奏（平稳/急促/呼吸感）；景别推进关系（远景-中景-特写的过渡）；视角与主体关系（主观/客观、跟随/悬停）；转场逻辑（无缝衔接、甩镜、遮罩）。"
+  },
+  {
+    key: "scene", label: "场景类",
+    guide: "场景类细化要点：场景建立顺序（先环境后主体）；空间结构描述（大小、纵深、布局）；元素关系与动线（人物在场景中的位置与移动）；时代与地域特征（建筑、植被、器物）；场景动态元素（风吹草动、水流、人群流动）。"
+  },
+];
 
 // 图音生视频(Ref2VA)支持的分辨率
 const RESOLUTIONS_IA2V = [
@@ -323,13 +417,31 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
   const allShots = (project.shots || []).filter(Boolean);
   const episodes = (project.episodes || []).filter(Boolean);
   const characters = project.materials?.characters || [];
-  const [busy, setBusy] = useState("");
+  // 并发生成：per-shot busy（支持同时生成多个分镜，进度互不干扰）；busyRef 为同步锁，防同一分镜重复点击
+  const [busyIds, setBusyIds] = useState({});
+  const busyRef = useRef({});
+  const setBusy = (id) => { busyRef.current[id] = true; setBusyIds((prev) => ({ ...prev, [id]: true })); };
+  const clearBusy = (id) => { delete busyRef.current[id]; setBusyIds((prev) => { const n = { ...prev }; delete n[id]; return n; }); };
   const [genProgress, setGenProgress] = useState({}); // {shotId: {text, queuePosition, status, progress}}
   const [selectedMode, setSelectedMode] = useState(() => String(getAppSetting("defaultVideoMode", "I2V")).toLowerCase());
-  const [resolution, setResolution] = useState(() => getAppSetting("defaultResolution", "768p竖"));
+  const [resolution, setResolution] = useState(() => getAppSetting("defaultResolution", "720p竖"));
   const [duration, setDuration] = useState(() => Number(getAppSetting("defaultDuration", 5)));
   const [selectedStyle, setSelectedStyle] = useState(() => getAppSetting("defaultVideoStyle", "cinematic"));
   const [videoProvider, setVideoProvider] = useState(() => getAppSetting("defaultVideoProvider", "autodl"));
+
+  // 初始分辨率兜底：确保默认分辨率在可用列表中（H3 已移除 768p 档位）
+  useEffect(() => {
+    const available = getResolutions(selectedMode, videoProvider);
+    if (available.length && !available.find(r => r.key === resolution)) {
+      setResolution(available[0].key);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 多分镜合并生成长视频：mergeMode=多选模式，mergeSelected=勾选的 shot id 集合
+  const [mergeMode, setMergeMode] = useState(false);
+  const [mergeSelected, setMergeSelected] = useState({});
+  const [mergingLongVideo, setMergingLongVideo] = useState(false);
 
   const [lastFrameUrl, setLastFrameUrl] = useState("");
   const [firstFrameUrl, setFirstFrameUrl] = useState("");
@@ -343,11 +455,25 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
   // 尾帧来源选择：next_shot=下一分镜分镜图，next_video=下个视频尾帧，custom=用户手动上传
   const [lastFrameSource, setLastFrameSource] = useState("next_shot");
   const [refiningShotId, setRefiningShotId] = useState("");
+  // AI细化提示词 - 镜头分类（auto=自动识别，也可手动选特效/打斗/文戏/氛围/惊悚/运镜/场景）
+  const [refineType, setRefineType] = useState("auto");
   const [editingShotId, setEditingShotId] = useState("");
   const [editingPrompt, setEditingPrompt] = useState("");
   const [selectedEpisode, setSelectedEpisode] = useState(episodes[0]?.id || "");
   const [selectedShotId, setSelectedShotId] = useState(allShots[0]?.id || "");
   const [showCharSelect, setShowCharSelect] = useState("");
+  // ===== 场景资产（保证场景一致性） =====
+  const [showScenePanel, setShowScenePanel] = useState(false);
+  const [showSceneSelect, setShowSceneSelect] = useState(""); // 展开场景选择的分镜id
+  const [analyzingScenes, setAnalyzingScenes] = useState(false);
+  const [generatingSceneId, setGeneratingSceneId] = useState("");
+  const [refiningSceneId, setRefiningSceneId] = useState("");
+  const [addingScene, setAddingScene] = useState(false);
+  const [newSceneName, setNewSceneName] = useState("");
+  const [newSceneDesc, setNewSceneDesc] = useState("");
+  const [newScenePrompt, setNewScenePrompt] = useState("");
+  const [editingScene, setEditingScene] = useState(null); // {id,name,desc,prompt}
+  const [previewSceneImage, setPreviewSceneImage] = useState("");
 
   // 加载素材库中的音频素材（用于快速选择已生成的配音）
   useEffect(() => {
@@ -388,27 +514,47 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       const desc = sh.sceneDesc || "";
       const dialogue = sh.dialogue || "";
       const characters = (sh.characters || []).join("、");
+      // 当前选中的镜头分类模板（auto=让LLM自动判断类型）
+      const refineTpl = REFINE_TEMPLATES.find(t => t.key === refineType) || REFINE_TEMPLATES[0];
+      const recommendedCam = recommendCamera(desc, sh.title || "", dialogue);
+      const cameraLibText = Object.entries(CAMERA_MOVES).map(([k, v]) => `${v.name}：${v.desc}`).join("\n");
       
-      const prompt = `你是一名专业的AI视频生成提示词工程师，精通MiniMax H3视频生成模型。
-请将以下简单的分镜描述，细化成一段专业、详细、适合MiniMax H3视频生成模型的中文提示词。
+      const prompt = `你是一名专业的AI视频生成提示词工程师，精通Wan2.2视频生成模型。
+请将以下简单的分镜描述，细化成一段按时间分段的、专业详细的中文视频提示词。
+
+输出格式（必须严格按此格式，不要添加其他内容）：
+【开场】0-3秒：镜头语言+画面描述+细节（如"微距特写，泛黄的千年古卷静静铺在案上，烛火跳动间，卷上墨字开始流动"）
+【发展】3-7秒：镜头语言+画面描述+细节（如"镜头螺旋上升环绕，墨迹向中心汇聚，凝聚成一位身着月白长裙的墨魂美人"）
+【高潮/收尾】7-${shotDuration}秒：镜头语言+画面描述+细节（如"慢动作特写，古卷文字飞起化作她的青丝，金色标点符号点缀发间，她缓缓抬眼看向镜头"）
 
 细化要求：
-必须按以下六大块结构输出（不要遗漏任何一块）：
-镜头：景别与运镜描述（含时长，镜头运动质感，如“中景，平稳跟随跟镜，人物保持画面中心，9秒时长，电影运镜轻微呼吸感，无剧烈晃动”）
-场景：环境细节描述（时间/地点/天气/动态环境元素，如雨丝、雾气、水洼反光等）
-人物：角色名+着装+动作+神态（如“林屿，一身深色休闲装束，单手撑纯黑色长柄雨伞，快步疾走；面部神情紧绷警惕，呼吸急促，眼神锐利不安”）
-光影色彩：色调与光线描述（冷/暖色调，光源，光线与环境的相互作用，如“冷青蓝调冷色调光线，夜晚环境光，细密雨丝垂落如同雨帘，地面水渍反射微光”）
-氛围：情绪基调+画面质感+画质要求（如“压抑紧绷，悬疑紧张，孤寂危险，暗黑写实电影质感，颗粒细腻，景深适中，背景虚化”）
-负面提示词：列出5-10个应避免的元素（逗号分隔，如“明亮日光，色彩艳丽，人物表情放松，镜头抖动剧烈，画面过曝，卡通画风”）
+1. 每段必须包含：镜头语言（景别+运镜）+ 画面主体 + 动作/变化 + 光影/色彩/细节
+2. 运镜必须从下方运镜库中选择，使用精确参数描述，不要自创
+3. 画面要具体细腻，可合理扩充细节（环境元素、光影变化、人物神态、服饰细节等）
+4. 时间分段要流畅衔接，前一段的结尾是后一段的起点
+5. 整体长度控制在250-400个中文字
+
+【专业运镜库】（必须从中选择）
+${cameraLibText}
+
+【运镜选择规则】
+1. 根据分镜的情绪和动作选择最匹配的运镜
+2. 推荐运镜：${recommendedCam.name}（${recommendedCam.reason}），如无更合适的选择请使用此推荐
+3. 运镜描述要具体到：镜头距离、运动速度、晃动幅度、主体位置关系
+4. 不要使用"平稳跟随跟镜"这种模糊描述
+
+【镜头类型】本分镜按「${refineTpl.label}」细化：
+${refineTpl.guide}
+
 要求：
 1. 输出纯中文，不要英文，不要解释，不要markdown代码块
-2. 每块内容要具体细腻，贴合分镜描述，可合理扩充细节
-3. 整体长度控制在300-500个中文字
+2. 严格按照【开场】【发展】【高潮/收尾】三段格式输出
+3. 每段内容要具体细腻，贴合分镜描述
 
 分镜信息：
 - 分镜标题：${sh.title}
 - 场景类型：${sceneType}
-- 运镜方式：${cameraMove}
+- 用户指定运镜：${cameraMove}（如用户指定了具体运镜，优先使用用户指定的）
 - 时长：${shotDuration}秒
 - 分镜描述：${desc}
 - 对话内容：${dialogue}
@@ -478,6 +624,245 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
     update({ shots: allShots.map(s => s.id === sh.id ? { ...s, selectedCharIds: newSelected } : s) });
   };
 
+  // ========== 场景资产（保证场景一致性） ==========
+  const scenes = project.materials?.scenes || [];
+
+  // 容错解析LLM返回的JSON数组（兼容```json代码块包裹）
+  const extractJsonArray = (text) => {
+    const t = (text || "").trim();
+    try { return JSON.parse(t); } catch (e) {}
+    try {
+      const m = t.match(/\[\s*\{[\s\S]*\}\s*\]/);
+      if (m) return JSON.parse(m[0]);
+    } catch (e) {}
+    return null;
+  };
+
+  const updateScenes = (newScenes) => {
+    update({ materials: { ...(project.materials || {}), scenes: newScenes } });
+  };
+
+  // 刷新积分余额显示
+  const refreshBalanceAfter = async () => {
+    if (!isLoggedIn()) return;
+    try {
+      const b = await getCreditBalance();
+      if (window.onCreditUpdate) window.onCreditUpdate(b.balance || b.credits || 0);
+      if (window.refreshUserInfo) window.refreshUserInfo();
+    } catch (e) {}
+  };
+
+  // AI分析剧本场景：从所有分镜中提取常用场景（名称/描述/生图提示词）
+  const analyzeScenes = async () => {
+    if (analyzingScenes) return;
+    if (!isLoggedIn()) { alert("请先登录后再使用场景分析功能"); return; }
+    const scenePrice = getPrice("llm_scene_extract", 1.0);
+    try {
+      const precheck = await precheckCredits(scenePrice, "text", "AI分析剧本场景");
+      if (!precheck.sufficient && precheck.sufficient !== undefined) {
+        log(`❌ 积分不足：需要${scenePrice}积分，当前余额${precheck.balance || 0}积分`);
+        alert(`积分不足！场景分析需要${scenePrice}积分，当前余额${precheck.balance || 0}积分。请充值后再试。`);
+        return;
+      }
+    } catch (e) {
+      log(`⚠️ 积分预校验失败：${e.message}`);
+    }
+    setAnalyzingScenes(true);
+    log("正在分析剧本场景...");
+    try {
+      const shotTexts = allShots.filter(Boolean).map(s =>
+        `- ${s.title || "未命名"}｜${s.sceneType || "未知"}\n  描述：${s.sceneDesc || "无"}${s.dialogue ? `\n  台词：${s.dialogue}` : ""}`
+      ).join("\n");
+      const prompt = `你是专业的短剧场景美术指导。请从以下分镜列表中分析出整部剧出现的所有场景（地点/环境），并为每个场景生成：
+1. 场景名称（简洁，如"雨夜小巷"）
+2. 场景描述（一句话说明场景的核心特征）
+3. 场景生图提示词（60-120字，必须包含：环境主体与空间结构、时代风格、光影色调、氛围情绪、关键道具元素，可直接用于AI生图）
+
+严格要求：
+- 【重要·纯场景空镜】场景提示词必须是空无一人的环境空镜：严禁出现任何人、人群、人潮、人影、背影、半身像、脸、手、脚等任何人体或身体部位；严禁兵器被人握持、手持道具等动作描写；"万头攒动/人潮涌动"等一律转化为空旷的广场、台阶、街道等无人环境
+- 合并相同/相似场景（"小巷"与"深夜小巷"算同一个）
+- 按出现频率排序，最多12个场景
+- 只输出JSON数组，不要任何其他文字或markdown代码块，格式：
+[{"name":"场景名","desc":"场景描述","prompt":"场景生图提示词"}]
+
+分镜列表：
+${shotTexts}`;
+      const res = await api("/api/llm/chat", {
+        method: "POST",
+        body: JSON.stringify({ messages: [{ role: "user", content: prompt }], max_tokens: 2048 }),
+      });
+      const arr = extractJsonArray(res.text);
+      if (!arr || !Array.isArray(arr) || arr.length === 0) throw new Error("LLM返回格式无法解析");
+      const valid = arr
+        .filter(s => s && (s.name || s.prompt))
+        .map((s, i) => ({
+          id: "scene_" + Date.now() + "_" + i + "_" + Math.random().toString(36).substring(2, 6),
+          name: String(s.name || `场景${i + 1}`).trim(),
+          desc: String(s.desc || "").trim(),
+          prompt: String(s.prompt || s.desc || s.name || "").trim(),
+          image: "",
+          source: "analyze",
+        }));
+      // 合并：分析结果与已有场景按名称去重，已有的保留原数据（含已生成图片）
+      const merged = [];
+      for (const ns of valid) {
+        const exist = scenes.find(o => o.name === ns.name);
+        merged.push(exist ? { ...exist } : ns);
+      }
+      for (const os of scenes) {
+        if (!valid.find(ns => ns.name === os.name)) merged.push(os);
+      }
+      updateScenes(merged);
+      setShowScenePanel(true);
+      log(`✅ 场景分析完成：识别 ${valid.length} 个场景（合并后共 ${merged.length} 个）`);
+      await refreshBalanceAfter();
+    } catch (err) {
+      log(`❌ 场景分析失败：${err.message}`);
+    } finally {
+      setAnalyzingScenes(false);
+    }
+  };
+
+  // AI优化单个场景提示词
+  const refineScenePrompt = async (scene) => {
+    if (refiningSceneId) return;
+    if (!isLoggedIn()) { alert("请先登录后再使用场景提示词优化"); return; }
+    const price = getPrice("llm_scene_refine", 1.0);
+    try {
+      const precheck = await precheckCredits(price, "text", `优化场景提示词：${scene.name}`);
+      if (!precheck.sufficient && precheck.sufficient !== undefined) {
+        log(`❌ 积分不足：需要${price}积分，当前余额${precheck.balance || 0}积分`);
+        alert(`积分不足！提示词优化需要${price}积分。请充值后再试。`);
+        return;
+      }
+    } catch (e) {
+      log(`⚠️ 积分预校验失败：${e.message}`);
+    }
+    setRefiningSceneId(scene.id);
+    log(`正在优化场景「${scene.name}」提示词...`);
+    try {
+      // 输入净化：剥离“人物：xxx”与△动作行，只留环境线索喂给LLM
+      const envDesc = (scene.desc || "").replace(/人物：[^\n。；]*/g, "").replace(/△[^\n]*/g, "").replace(/【[^】]*】/g, "").trim() || scene.name;
+      const envPrompt = (scene.prompt || "").replace(/人物：[^\n。；]*/g, "").replace(/△[^\n]*/g, "").replace(/【[^】]*】/g, "").trim() || "";
+      const prompt = `你是专业的AI生图提示词工程师。请优化以下场景的生图提示词，使其更精致、可直接用于AI生图。
+要求：1. 60-120字；2. 包含：环境主体与空间结构、时代风格、光影色调、氛围情绪、关键道具；3. 只输出提示词本身，不要解释、不要markdown代码块。
+【重要·纯场景空镜】这是场景概念图，必须是空无一人的环境空镜：严禁出现任何人、人群、人潮、人影、背影、脸、手、脚等任何人体或身体部位；严禁"铁手套握飞针"等任何手持兵器/道具的动作描写；"万头攒动/人潮涌动"等一律改为空旷的广场、台阶、街道等无人环境；忽略下面描述中的全部人物、动作、台词细节，只提炼环境本身：空间结构、建筑陈设、自然景观、天气、无人场景道具、光影色调、氛围情绪。
+
+场景名称：${scene.name}
+环境描述：${envDesc}
+当前提示词：${envPrompt || "无"}`;
+      const res = await api("/api/llm/chat", {
+        method: "POST",
+        body: JSON.stringify({ messages: [{ role: "user", content: prompt }], max_tokens: 512 }),
+      });
+      const text = (res.text || "").trim();
+      if (!text) throw new Error("LLM未返回内容");
+      updateScenes(scenes.map(s => s.id === scene.id ? { ...s, prompt: text } : s));
+      log(`✅ 场景「${scene.name}」提示词已优化（${text.length}字符）`);
+      await refreshBalanceAfter();
+    } catch (err) {
+      log(`❌ 提示词优化失败：${err.message}`);
+    } finally {
+      setRefiningSceneId("");
+    }
+  };
+
+  // AI生成场景参考图（Qwen-Image，保证场景一致性）
+  const genSceneImage = async (scene) => {
+    if (generatingSceneId) return;
+    if (!isLoggedIn()) { alert("请先登录后再使用场景生图功能"); return; }
+    const imgPrice = getPrice("image_generate", 3.0);
+    try {
+      const precheck = await precheckCredits(imgPrice, "image", `场景生图：${scene.name}`);
+      if (!precheck.sufficient && precheck.sufficient !== undefined) {
+        log(`❌ 积分不足：需要${imgPrice}积分，当前余额${precheck.balance || 0}积分`);
+        alert(`积分不足！生成场景图需要${imgPrice}积分，当前余额${precheck.balance || 0}积分。请充值后再试。`);
+        return;
+      }
+    } catch (e) {
+      log(`⚠️ 积分预校验失败：${e.message}`);
+    }
+    setGeneratingSceneId(scene.id);
+    log(`正在生成场景「${scene.name}」图片...`);
+    try {
+      const prompt = scene.prompt || scene.desc || scene.name;
+      const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1328x1328", n: 1 });
+      const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
+      if (!imageUrl) throw new Error("未返回图片地址");
+      updateScenes(scenes.map(s => s.id === scene.id ? { ...s, image: imageUrl } : s));
+      // 同时存入素材库
+      try {
+        const currentAssets = project?.assets || [];
+        const newImageAsset = {
+          id: "a_scene_image_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8),
+          type: "image",
+          title: `${scene.name}场景图（${new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}）`,
+          url: imageUrl,
+          status: "ready",
+          tags: ["场景生图", scene.name],
+          favorite: false,
+          sceneId: scene.id,
+          sceneName: scene.name,
+          createdAt: Date.now(),
+        };
+        update({ assets: [newImageAsset, ...currentAssets] });
+        log(`✅ 场景图已存入素材库：${newImageAsset.title}`);
+      } catch (e) {
+        log(`⚠️ 场景图存入素材库失败：${e.message}`);
+      }
+      log(`✅ 场景「${scene.name}」图片生成成功`);
+      await refreshBalanceAfter();
+    } catch (err) {
+      log(`❌ 场景生图失败：${err.message}`);
+    } finally {
+      setGeneratingSceneId("");
+    }
+  };
+
+  // 添加场景（手动）
+  const saveNewScene = () => {
+    const name = newSceneName.trim();
+    if (!name) { alert("请填写场景名称"); return; }
+    const newScene = {
+      id: "scene_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6),
+      name,
+      desc: newSceneDesc.trim(),
+      prompt: newScenePrompt.trim() || name,
+      image: "",
+      source: "manual",
+    };
+    updateScenes([...scenes, newScene]);
+    setAddingScene(false);
+    setNewSceneName(""); setNewSceneDesc(""); setNewScenePrompt("");
+    log(`✅ 已添加场景「${name}」`);
+  };
+
+  // 保存场景编辑
+  const saveEditScene = () => {
+    if (!editingScene) return;
+    const name = editingScene.name.trim();
+    if (!name) { alert("场景名称不能为空"); return; }
+    updateScenes(scenes.map(s => s.id === editingScene.id
+      ? { ...s, name, desc: editingScene.desc.trim(), prompt: editingScene.prompt.trim() }
+      : s));
+    setEditingScene(null);
+    log(`场景「${name}」已更新`);
+  };
+
+  // 删除场景
+  const deleteScene = (scene) => {
+    if (!window.confirm(`确定删除场景「${scene.name}」吗？删除后分镜的场景绑定也会解除。`)) return;
+    updateScenes(scenes.filter(s => s.id !== scene.id));
+    update({ shots: allShots.map(s => s.selectedSceneId === scene.id ? { ...s, selectedSceneId: null } : s) });
+    log(`已删除场景「${scene.name}」`);
+  };
+
+  // 切换分镜绑定的场景（单选）
+  const toggleSceneSelection = (sh, sceneId) => {
+    const newVal = sh.selectedSceneId === sceneId ? null : sceneId;
+    update({ shots: allShots.map(s => s.id === sh.id ? { ...s, selectedSceneId: newVal } : s) });
+  };
+
   // 找上一个分镜（同集内，按顺序）
   const getPrevShot = (sh) => {
     if (!sh) return null;
@@ -510,15 +895,16 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
   };
 
   const genVideo = async (sh) => {
+    if (busyRef.current[sh.id]) return; // 同步锁：同一分镜防重复提交
     setBusy(sh.id);
     log(`开始生成视频：${sh.title}（${selectedMode.toUpperCase()}）`);
-    // 未登录用户不能使用
-    if (!isLoggedIn()) {
-      alert("请先登录后再使用视频生成功能");
-      setBusy("");
-      return;
-    }
     try {
+      // 未登录用户不能使用（移进try，确保异常不静默）
+      if (!isLoggedIn()) {
+        alert("请先登录后再使用视频生成功能");
+        clearBusy(sh.id);
+        return;
+      }
       // 积分预校验：按模式+分辨率分别定价
       const pricePerSec = getVideoPricePerSec(selectedMode, resolution, videoProvider);
       const needCredits = pricePerSec * duration;
@@ -528,13 +914,16 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
         if (!precheck.sufficient && precheck.sufficient !== undefined) {
           log(`❌ 积分不足：需要${needCredits}积分，当前余额${precheck.balance || 0}积分`);
           alert(`积分不足！生成此视频需要${needCredits}积分，当前余额${precheck.balance || 0}积分。请充值后再试。`);
-          setBusy("");
+          clearBusy(sh.id);
           return;
         }
         log(`积分预校验通过：需要${needCredits}积分，余额充足`);
       } catch (e) {
         log(`⚠️ 积分预校验失败（${e.message}），继续生成`);
       }
+
+      // 分镜绑定的场景（用于场景一致性：场景参考图 + 场景设定并入提示词）
+      const boundScene = scenes.find(sc => sc.id === sh.selectedSceneId);
 
       const sceneType = sh.sceneType || "中景";
       const cameraMove = sh.cameraMove || "固定";
@@ -575,6 +964,13 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
         log(`使用默认模板提示词 + 风格：${styleObj?.label || "默认"} + 构图：${compositionDesc || "默认"}（建议先点击AI细化提示词）`);
       }
 
+      // 场景一致性：并入分镜绑定场景的设定（场景名+场景提示词）
+      if (boundScene) {
+        const sceneText = [boundScene.name, boundScene.prompt || boundScene.desc].filter(Boolean).join("。");
+        videoPrompt += `。场景设定：${sceneText}`;
+        log(`已并入场景「${boundScene.name}」设定，保证场景一致性`);
+      }
+
       // AutoDL ComfyUI工作流参数
       const workflowParams = {
         prompt: videoPrompt,
@@ -585,12 +981,12 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       let refIdx = 0;
       let hasFirstFrame = false;
 
-      if (selectedMode === "i2v") {
-        // 图生视频（minimax_h3_lightx2v_v5）：只使用人物参考图，不用首帧
+      if (selectedMode === "i2v" || selectedMode === "s2v") {
+        // 图生视频（minimax_h3_lightx2v_v5 / wan22/kling 人物参考）：使用人物+场景参考图；s2v=人物+场景参考，i2v+prem=首帧+人物+场景
         const charImages = getShotCharacterImages(sh);
         if (charImages.length === 0) {
           log("⚠️ 没有可用的角色参考图，请先在「人物管理」生成角色三视图");
-          setBusy("");
+          clearBusy(sh.id);
           return;
         }
 
@@ -612,47 +1008,65 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
         }
         const charCount = refIdx; // 人物参考图数量
 
+        // 1.5 上传场景参考图（分镜绑定了场景且有场景图时，人物图之后追加，保证场景一致性）
+        if (boundScene && boundScene.image) {
+          log(`找到场景「${boundScene.name}」参考图，开始上传…`);
+          const scenePublicUrl = await uploadImageToServer(boundScene.image, log);
+          if (scenePublicUrl && refIdx < 9) {
+            workflowParams[`ref_image_${refIdx}`] = scenePublicUrl;
+            log(`场景参考图上传成功，ref_image_${refIdx} = ${scenePublicUrl.substring(0, 80)}...`);
+            refIdx++;
+          } else {
+            log(`⚠️ 场景参考图上传失败或参考图已达上限（${refIdx}/9），仅用人物参考图`);
+          }
+        }
+
         // 2. 添加随机种子（seed）
         const seed = Math.floor(Math.random() * 2147483647);
         workflowParams.seed = seed;
         log(`随机种子：${seed}`);
 
-        if (videoProvider === "wan27" || videoProvider === "kling") {
-          log(`参考图：人物${charCount}张（ref_image_0-ref_image_${charCount - 1}），首帧来源见下方设置`);
-          // 参考首帧+人物图模式：获取首帧（本分镜分镜图 / 上个视频尾帧 / 手动上传）
-          let resolvedFirstFrame = null;
-          let firstFrameDesc = "";
-          if (firstFrameSource === "shot") {
-            resolvedFirstFrame = sh.imageUrl;
-            firstFrameDesc = `本分镜「${sh.title}」分镜图`;
-          } else if (firstFrameSource === "prev_video") {
-            const prevShot = getPrevShot(sh);
-            if (prevShot && prevShot.videoUrl) {
-              log(`找到上一镜「${prevShot.title}」视频，正在提取尾帧作为首帧…`);
-              resolvedFirstFrame = await extractLastFrameViaAPI(prevShot.videoUrl, log);
-              if (!resolvedFirstFrame) {
-                log("调度机提取失败，尝试前端提取…");
-                const firstFrame = await extractLastFrame(prevShot.videoUrl);
-                if (firstFrame) resolvedFirstFrame = await uploadImageToServer(firstFrame, log);
+        if (videoProvider === "wan22" || videoProvider === "kling") {
+          if (selectedMode === "s2v") {
+            // 人物+场景参考模式：不依赖首帧，直接用人物+场景参考图
+            log(`参考图：人物${charCount}张（ref_image_0-ref_image_${charCount - 1}），人物+场景参考模式，不使用首帧`);
+          } else {
+            // 首帧+人物图模式：获取首帧（本分镜分镜图 / 上个视频尾帧 / 手动上传）
+            log(`参考图：人物${charCount}张（ref_image_0-ref_image_${charCount - 1}），首帧来源见下方设置`);
+            let resolvedFirstFrame = null;
+            let firstFrameDesc = "";
+            if (firstFrameSource === "shot") {
+              resolvedFirstFrame = sh.imageUrl;
+              firstFrameDesc = `本分镜「${sh.title}」分镜图`;
+            } else if (firstFrameSource === "prev_video") {
+              const prevShot = getPrevShot(sh);
+              if (prevShot && prevShot.videoUrl) {
+                log(`找到上一镜「${prevShot.title}」视频，正在提取尾帧作为首帧…`);
+                resolvedFirstFrame = await extractLastFrameViaAPI(prevShot.videoUrl, log);
+                if (!resolvedFirstFrame) {
+                  log("调度机提取失败，尝试前端提取…");
+                  const firstFrame = await extractLastFrame(prevShot.videoUrl);
+                  if (firstFrame) resolvedFirstFrame = await uploadImageToServer(firstFrame, log);
+                }
+                firstFrameDesc = `上一镜「${prevShot.title}」视频尾帧`;
+              } else {
+                throw new Error("首帧来源选择了「上个视频尾帧」，但上一镜没有生成视频。请先生成上一镜视频，或选择其他首帧来源。");
               }
-              firstFrameDesc = `上一镜「${prevShot.title}」视频尾帧`;
-            } else {
-              throw new Error("首帧来源选择了「上个视频尾帧」，但上一镜没有生成视频。请先生成上一镜视频，或选择其他首帧来源。");
+            } else if (firstFrameSource === "custom") {
+              resolvedFirstFrame = firstFrameUrl;
+              firstFrameDesc = "用户手动上传";
             }
-          } else if (firstFrameSource === "custom") {
-            resolvedFirstFrame = firstFrameUrl;
-            firstFrameDesc = "用户手动上传";
+            if (!resolvedFirstFrame) {
+              throw new Error(`首帧获取失败（来源：${firstFrameDesc}）。请检查图片是否有效，或选择其他首帧来源。`);
+            }
+            log(`首帧：${firstFrameDesc}`);
+            const firstPublicUrl = await uploadImageToServer(resolvedFirstFrame, log);
+            if (!firstPublicUrl) {
+              throw new Error("首帧上传失败，请检查图片URL或重新上传。");
+            }
+            workflowParams.first_frame = firstPublicUrl;
+            log(`首帧上传成功 ✓`);
           }
-          if (!resolvedFirstFrame) {
-            throw new Error(`首帧获取失败（来源：${firstFrameDesc}）。请检查图片是否有效，或选择其他首帧来源。`);
-          }
-          log(`首帧：${firstFrameDesc}`);
-          const firstPublicUrl = await uploadImageToServer(resolvedFirstFrame, log);
-          if (!firstPublicUrl) {
-            throw new Error("首帧上传失败，请检查图片URL或重新上传。");
-          }
-          workflowParams.first_frame = firstPublicUrl;
-          log(`首帧上传成功 ✓`);
         } else {
           log(`参考图：人物${charCount}张（ref_image_0-ref_image_${charCount - 1}），不使用首帧`);
         }
@@ -822,7 +1236,11 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
 
       // 根据模式选择不同的工作流ID
       let currentWorkflowId;
-      if (selectedMode === "i2v") {
+      if (videoProvider === "wan22") {
+        currentWorkflowId = selectedMode === "s2v" ? WAN22_WORKFLOW_ID + "_s2v" : WAN22_WORKFLOW_ID + "_i2v"; // 自部署 Wan2.2-VACE-Fun-A14B
+      } else if (videoProvider === "kling") {
+        currentWorkflowId = KLING_WORKFLOW_ID; // 可灵 v3-omni
+      } else if (selectedMode === "i2v" || selectedMode === "s2v") {
         currentWorkflowId = I2V_WORKFLOW_ID; // minimax_h3_lightx2v_v5
       } else if (selectedMode === "r2v") {
         currentWorkflowId = R2V_WORKFLOW_ID; // minimax_h3_lightx2v
@@ -836,23 +1254,71 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       const maxDuration = getMaxDuration(selectedMode);
       workflowParams.duration = Math.min(maxDuration, Math.max(1, workflowParams.duration));
 
-      log(`提交视频生成任务，工作流：${currentWorkflowId}，模式：${selectedMode}`);
-
-      const res = await runDispatchJob({
-        type: "video",
-        payload: {
-          workflow: currentWorkflowId,
-          model: videoProvider === "wan27" ? "Wan2.7-r2v" : (videoProvider === "kling" ? "Kling-v3-omni" : "MiniMax-H3"),
-          mode: selectedMode,
-          provider: videoProvider,
-          ...workflowParams,
-        },
-        pollInterval: 5000,
-        timeoutMs: 7200000,
-        onProgress: (progress, text, info) => {
-          setGenProgress(prev => ({ ...prev, [sh.id]: { text, ...info } }));
+      // ===== 长视频（高级生成·分段续接）：30/60 秒，每 10 秒一段，段间尾帧衔接 =====
+      const isLongVideo = (videoProvider === "wan22" && selectedMode === "i2v" && duration >= 30);
+      let res;
+      if (isLongVideo) {
+        const SEG_SEC = 10;
+        const totalSegs = Math.round(duration / SEG_SEC);
+        const segUrls = [];
+        log(`🎬 长视频模式：${totalSegs} 段 × ${SEG_SEC} 秒 = ${totalSegs * SEG_SEC} 秒，分段续接生成（每段首帧自动衔接上一段尾帧）`);
+        for (let segIdx = 1; segIdx <= totalSegs; segIdx++) {
+          const segParams = { ...workflowParams, duration: SEG_SEC };
+          if (segIdx > 1) {
+            log(`长视频第 ${segIdx}/${totalSegs} 段：提取上一段尾帧…`);
+            const tailRes = await extractTail(segUrls[segUrls.length - 1]);
+            const tailUrl = tailRes && tailRes.frame_url;
+            if (!tailUrl) {
+              throw new Error(`长视频第 ${segIdx} 段尾帧提取失败，已中止（前 ${segIdx - 1} 段已生成并扣费，未拼接）`);
+            }
+            segParams.first_frame = tailUrl;
+            log(`长视频第 ${segIdx}/${totalSegs} 段：尾帧→首帧衔接成功`);
+          }
+          log(`长视频第 ${segIdx}/${totalSegs} 段：提交生成（${SEG_SEC}秒）…`);
+          const segRes = await runDispatchJob({
+            type: "video",
+            payload: {
+              workflow: currentWorkflowId,
+              model: videoProvider === "wan22" ? "Wan2.2-VACE-Fun-A14B" : (videoProvider === "kling" ? "Kling-v3-omni" : "MiniMax-H3"),
+              mode: selectedMode,
+              provider: videoProvider,
+              ...segParams,
+            },
+            pollInterval: 5000,
+            timeoutMs: 7200000,
+            onProgress: (progress, text, info) => {
+              setGenProgress(prev => ({ ...prev, [sh.id]: { text: `长视频 ${segIdx}/${totalSegs} · ${text}`, ...info } }));
+            }
+          });
+          segUrls.push(segRes.resultUrl);
+          log(`长视频第 ${segIdx}/${totalSegs} 段完成 ✅（${segRes.resultUrl.substring(0, 80)}…）`);
         }
-      });
+        log("长视频全部段落生成完成，拼接合成中…");
+        const joined = await concatVideos(segUrls);
+        if (!joined || !joined.video_url) {
+          throw new Error(`长视频拼接失败（${totalSegs} 段均已生成并扣费）`);
+        }
+        res = { resultUrl: joined.video_url };
+        log(`✅ 长视频拼接完成：${totalSegs * SEG_SEC} 秒`);
+      } else {
+        log(`提交视频生成任务，工作流：${currentWorkflowId}，模式：${selectedMode}`);
+
+        res = await runDispatchJob({
+          type: "video",
+          payload: {
+            workflow: currentWorkflowId,
+            model: videoProvider === "wan22" ? "Wan2.2-VACE-Fun-A14B" : (videoProvider === "kling" ? "Kling-v3-omni" : "MiniMax-H3"),
+            mode: selectedMode,
+            provider: videoProvider,
+            ...workflowParams,
+          },
+          pollInterval: 5000,
+          timeoutMs: 7200000,
+          onProgress: (progress, text, info) => {
+            setGenProgress(prev => ({ ...prev, [sh.id]: { text, ...info } }));
+          }
+        });
+      }
 
       // 获取视频实际时长并更新
       const actualDuration = await new Promise((resolve) => {
@@ -864,12 +1330,11 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       });
       const durationUpdate = actualDuration ? { duration: actualDuration } : {};
 
-      // 1. 更新分镜的videoUrl（继续覆盖旧视频，保持最新）
-      update({ shots: shots.map(s => s.id === sh.id ? { ...s, videoUrl: res.resultUrl, ...durationUpdate } : s) });
+      // 1. 更新分镜的videoUrl（函数式更新：并发生成多个分镜时互不覆盖）
+      update((p) => ({ ...p, shots: p.shots.map(s => s.id === sh.id ? { ...s, videoUrl: res.resultUrl, ...durationUpdate } : s) }));
       // 2. 同时存入素材库（根据用户设置控制是否自动存入）
       if (getAppSetting("autoAddToAssets", true)) {
         try {
-          const currentAssets = project?.assets || [];
           const newVideoAsset = {
             id: "a_video_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8),
             type: "video",
@@ -885,7 +1350,8 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
             mode: selectedMode,
             createdAt: Date.now()
           };
-          update({ assets: [newVideoAsset, ...currentAssets] });
+          // 函数式更新：并发存入素材库时基于最新列表，不互相覆盖
+          update((p) => ({ ...p, assets: [newVideoAsset, ...(p.assets || [])] }));
           log(`✅ 视频已存入素材库：${newVideoAsset.title}`);
         } catch (e) {
           log(`⚠️ 视频存入素材库失败：${e.message}`);
@@ -904,15 +1370,190 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
     } catch (e) {
       log(`❌ 视频生成失败：${e.message}`);
     } finally {
-      setBusy("");
+      clearBusy(sh.id);
       setGenProgress(prev => { const next = { ...prev }; delete next[sh.id]; return next; });
+    }
+  };
+
+  // ===== 多分镜合并生成长视频（选 3-6 个分镜 → H3 续接生成一条长视频） =====
+  const toggleMergeSelect = (id) => {
+    setMergeSelected(prev => {
+      const n = { ...prev };
+      if (n[id]) { delete n[id]; return n; }
+      if (Object.keys(n).length >= 6) { alert("最多选择 6 个分镜"); return prev; }
+      n[id] = true;
+      return n;
+    });
+  };
+
+  const buildMergedShotPrompt = (sh) => {
+    const sceneType = sh.sceneType || "中景";
+    const cameraMove = sh.cameraMove || "固定";
+    const shotDuration = sh.duration || duration || 5;
+    const styleObj = VIDEO_STYLES.find(s => s.key === selectedStyle);
+    const styleDesc = styleObj ? styleObj.desc : "";
+    let compositionDesc = "";
+    if (resolution.includes("竖")) compositionDesc = "竖屏9:16构图";
+    else if (resolution.includes("横")) compositionDesc = "横屏16:9构图";
+    else if (resolution.includes("1:1") || resolution.includes("方")) compositionDesc = "方形1:1构图";
+    const eventFullDesc = (sh.title || "") + (sh.sceneDesc ? "。" + sh.sceneDesc : "");
+    let videoPrompt;
+    if (sh.promptCn && sh.promptCn.length > 50) {
+      const suffixParts = [];
+      if (styleDesc) suffixParts.push(styleDesc);
+      if (compositionDesc) suffixParts.push(compositionDesc);
+      suffixParts.push(PROMPT_FIXED_SUFFIX);
+      videoPrompt = `${sh.promptCn}。${suffixParts.join("。")}`;
+    } else {
+      videoPrompt = `${sceneType}镜头，${cameraMove}运镜，时长${shotDuration}秒。${eventFullDesc}。${styleDesc ? styleDesc + "。" : ""}${compositionDesc ? compositionDesc + "。" : ""}${PROMPT_FIXED_SUFFIX}`;
+    }
+    const boundScene = scenes.find(sc => sc.id === sh.selectedSceneId);
+    if (boundScene) {
+      const sceneText = [boundScene.name, boundScene.prompt || boundScene.desc].filter(Boolean).join("。");
+      videoPrompt += `。场景设定：${sceneText}`;
+    }
+    return videoPrompt;
+  };
+
+  const genMergedLongVideo = async () => {
+    if (mergingLongVideo) return;
+    const selShots = allShots.filter(s => mergeSelected[s.id]);
+    if (selShots.length < 3 || selShots.length > 6) {
+      alert(`请选择 3-6 个分镜合并生成长视频（当前选中 ${selShots.length} 个）`);
+      return;
+    }
+    if (!isLoggedIn()) {
+      alert("请先登录后再使用视频生成功能");
+      return;
+    }
+    for (const sh of selShots) {
+      if (getShotCharacterImages(sh).length === 0) {
+        alert(`分镜「${sh.title}」没有角色参考图，请先选择角色或生成人物图`);
+        return;
+      }
+    }
+    const totalSec = selShots.reduce((acc, sh) => acc + (sh.duration || duration || 5), 0);
+    const pricePerSec = getVideoPricePerSec("s2v", resolution, videoProvider);
+    const needCredits = Math.round(totalSec * pricePerSec);
+    log(`🎬 合并长视频：${selShots.length} 个分镜，合计约 ${totalSec} 秒，需 ${needCredits} 积分（${pricePerSec}积分/秒）`);
+    try {
+      const precheck = await precheckCredits(needCredits, "video_shots", `合并长视频：${selShots.length}个分镜`);
+      if (!precheck.sufficient && precheck.sufficient !== undefined) {
+        log(`❌ 积分不足：需要${needCredits}积分，当前余额${precheck.balance || 0}积分`);
+        alert(`积分不足！合并长视频需要${needCredits}积分，当前余额${precheck.balance || 0}积分。请充值后再试。`);
+        return;
+      }
+      log("积分预校验通过，开始构建分镜队列…");
+    } catch (e) {
+      log(`⚠️ 积分预校验失败（${e.message}），继续生成`);
+    }
+
+    setMergingLongVideo(true);
+    try {
+      const shots = [];
+      for (let i = 0; i < selShots.length; i++) {
+        const sh = selShots[i];
+        log(`合并分镜 ${i + 1}/${selShots.length}「${sh.title}」：构建提示词 + 上传参考图…`);
+        const prompt = buildMergedShotPrompt(sh);
+        // 人物参考图（第1张起）
+        const subjectRefs = [];
+        const charImages = getShotCharacterImages(sh);
+        for (const img of charImages) {
+          const url = await uploadImageToServer(img, log);
+          if (url) subjectRefs.push(url);
+        }
+        // 场景参考图（人物之后追加）
+        const sceneRefs = [];
+        const boundScene = scenes.find(sc => sc.id === sh.selectedSceneId);
+        if (boundScene && boundScene.image) {
+          const url = await uploadImageToServer(boundScene.image, log);
+          if (url) sceneRefs.push(url);
+        }
+        const shotItem = { prompt, duration: Math.min(10, Math.max(3, sh.duration || duration || 5)) };
+        if (subjectRefs[0]) shotItem.ref_image_0 = subjectRefs[0];
+        if (sceneRefs[0]) shotItem.ref_image_1 = sceneRefs[0];
+        shots.push(shotItem);
+        log(`  分镜${i + 1}：人物${subjectRefs.length}张 场景${sceneRefs.length}张 时长${shotItem.duration}秒`);
+      }
+
+      log(`提交合并长视频任务（${shots.length} 段，${resolution}）…`);
+      const res = await runDispatchJob({
+        type: "video_shots",
+        payload: {
+          workflow: WAN22_WORKFLOW_ID + "_shots",
+          model: "MiniMax-H3",
+          mode: "s2v",
+          provider: "wan22",
+          resolution,
+          total_duration: totalSec,
+          shots,
+        },
+        pollInterval: 5000,
+        timeoutMs: 14400000,
+        onProgress: (progress, text, info) => {
+          setGenProgress(prev => ({ ...prev, merge: { text: `合并长视频 · ${text}`, ...info } }));
+        }
+      });
+
+      // 完成：取实际时长
+      const actualDuration = await new Promise((resolve) => {
+        const v = document.createElement("video");
+        v.preload = "metadata";
+        v.onloadedmetadata = () => resolve(Math.round(v.duration));
+        v.onerror = () => resolve(null);
+        v.src = res.resultUrl;
+      });
+      const durationUpdate = actualDuration ? { duration: actualDuration } : {};
+
+      // 1. 视频放到第一个选中分镜上
+      update((p) => ({ ...p, shots: p.shots.map(s => s.id === selShots[0].id ? { ...s, videoUrl: res.resultUrl, ...durationUpdate } : s) }));
+      // 2. 存入素材库
+      if (getAppSetting("autoAddToAssets", true)) {
+        try {
+          const newVideoAsset = {
+            id: "a_video_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8),
+            type: "video",
+            title: `合并长视频·${selShots.length}镜（${new Date().toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}）`,
+            url: res.resultUrl,
+            status: "ready",
+            tags: ["视频生成", "长视频", `合并${selShots.length}镜`],
+            favorite: false,
+            shotId: selShots[0].id,
+            episodeId: selShots[0].episodeId || "",
+            duration: actualDuration || totalSec,
+            resolution: resolution,
+            mode: "s2v",
+            createdAt: Date.now()
+          };
+          update((p) => ({ ...p, assets: [newVideoAsset, ...(p.assets || [])] }));
+          log(`✅ 合并长视频已存入素材库：${newVideoAsset.title}`);
+        } catch (e) {
+          log(`⚠️ 视频存入素材库失败：${e.message}`);
+        }
+      }
+      log(`✅ 合并长视频生成成功：${selShots.length} 个分镜${actualDuration ? `（实际时长${actualDuration}秒）` : `（约${totalSec}秒）`}`);
+      if (isLoggedIn()) {
+        try {
+          const balanceData = await getCreditBalance();
+          if (window.onCreditUpdate) window.onCreditUpdate(balanceData.balance || balanceData.credits || 0);
+          if (window.refreshUserInfo) window.refreshUserInfo();
+        } catch (e) {}
+      }
+      // 成功后退出多选模式
+      setMergeMode(false);
+      setMergeSelected({});
+    } catch (e) {
+      log(`❌ 合并长视频失败：${e.message}`);
+    } finally {
+      setMergingLongVideo(false);
+      setGenProgress(prev => { const next = { ...prev }; delete next.merge; return next; });
     }
   };
 
   // 视频价格：按模式+分辨率分别定价
   const pricePerSec = getVideoPricePerSec(selectedMode, resolution, videoProvider);
   const currentCredits = pricePerSec * duration;
-  const isPremProvider = videoProvider === "wan27" || videoProvider === "kling";
+  const isPremProvider = videoProvider === "wan22" || videoProvider === "kling";
   const showFirstFramePanel = selectedMode === "r2v" || (isPremProvider && selectedMode === "i2v");
   const showLastFrame = selectedMode === "r2v";
 
@@ -932,7 +1573,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
         </div>
       )}
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 20, background: "var(--bg, #0b0f17)", margin: "0 -16px 16px", padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, boxShadow: "0 2px 8px rgba(0,0,0,0.25)" }}>
         <h2 style={{ margin: 0, fontSize: 18 }}>🎥 视频生成 · {VIDEO_PROVIDERS.find(p => p.key === videoProvider)?.label || "标准"}</h2>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <select style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12 }}
@@ -942,7 +1583,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
               // 自动校正分辨率（如果当前分辨率在新模式下不可用）
               const availableResolutions = getResolutions(newMode, videoProvider);
               if (!availableResolutions.find(r => r.key === resolution)) {
-                setResolution("768p竖");
+                setResolution(availableResolutions[0] ? availableResolutions[0].key : "768p竖");
               }
               // 自动校正时长（如果当前时长超过新模式的最大值）
               const maxDur = getMaxDuration(newMode);
@@ -950,32 +1591,47 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
                 setDuration(maxDur);
               }
             }}>
-            {getVideoModes(videoProvider).map(m => <option key={m.key} value={m.key}>{isPremProvider && m.key === "i2v" ? "参考首帧+人物图" : m.label}</option>)}
+            {getVideoModes(videoProvider).map(m => <option key={m.key} value={m.key}>{isPremProvider && m.key === "i2v" ? "首帧+人物+场景参考" : m.label}</option>)}
           </select>
           <select style={{ padding: "6px 10px", border: "1px solid #7A5CFF", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12, fontWeight: 600 }}
             value={videoProvider} onChange={e => {
               const newProvider = e.target.value;
               setVideoProvider(newProvider);
               saveAppSetting("defaultVideoProvider", newProvider);
-              // 万相/可灵不支持480P，自动校正分辨率
-              if ((newProvider === "wan27" || newProvider === "kling") && resolution.includes("480")) {
-                setResolution("768p竖");
+              // 当前模式不被新渠道支持时，先切到第一个可用模式
+              const nextMode = getVideoModes(newProvider).find(m => m.key === selectedMode) ? selectedMode : getVideoModes(newProvider)[0].key;
+              // 校正分辨率到新渠道可用档（如 wan22 切到 576P 竖屏）
+              const avail = getResolutions(nextMode, newProvider);
+              if (!avail.find(r => r.key === resolution)) {
+                setResolution(avail[0] ? avail[0].key : "768p竖");
               }
-              // 当前模式不被新渠道支持时，自动切到第一个可用模式
-              if (!getVideoModes(newProvider).find(m => m.key === selectedMode)) {
-                setSelectedMode(getVideoModes(newProvider)[0].key);
+              if (nextMode !== selectedMode) {
+                setSelectedMode(nextMode);
+              }
+              // 长视频（30/60秒）仅高级生成 Wan2.2 的 I2V 可用；切到其他渠道/模式时回到常规时长
+              if (duration >= 30 && !(newProvider === "wan22" && nextMode === "i2v")) {
+                setDuration(Math.min(duration, getMaxDuration(nextMode)));
               }
             }}
             title="选择视频生成渠道（不同模型价格不同）">
             {VIDEO_PROVIDERS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
           </select>
+          {videoProvider === "wan22" && (
+            <button
+              onClick={() => { setMergeMode(!mergeMode); if (!mergeMode) setMergeSelected({}); }}
+              style={{ padding: "6px 12px", border: mergeMode ? "2px solid #7A5CFF" : "1px solid #7A5CFF", borderRadius: 6, background: mergeMode ? "rgba(122,92,255,0.2)" : "transparent", color: "#7A5CFF", cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+              title="勾选 3-6 个分镜，合并生成一条长视频（分镜间自动衔接）"
+            >
+              🎬 合并长视频{mergeMode ? "（多选分镜中）" : ""}
+            </button>
+          )}
           <select style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12 }}
             value={resolution} onChange={e => setResolution(e.target.value)}>
             {getResolutions(selectedMode, videoProvider).map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
           </select>
           <select style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12 }}
             value={duration} onChange={e => setDuration(Number(e.target.value))}>
-            {getDurations(selectedMode).map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
+            {getDurations(selectedMode, videoProvider).map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
           </select>
           <select style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12 }}
             value={selectedStyle} onChange={e => setSelectedStyle(e.target.value)}
@@ -995,11 +1651,168 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       {/* 模式说明 */}
       <div style={{ marginBottom: 12, padding: "10px 14px", border: "1px solid rgba(122,92,255,0.3)", borderRadius: 8, background: "rgba(122,92,255,0.1)" }}>
         <div style={{ fontSize: 12, color: "#7A5CFF", fontWeight: 600, marginBottom: 4 }}>
-          当前模式：{isPremProvider && selectedMode === "i2v" ? "参考首帧+人物图" : (VIDEO_MODES.find(m => m.key === selectedMode)?.label)}
+          当前模式：{isPremProvider && selectedMode === "i2v" ? "首帧+人物+场景参考" : (VIDEO_MODES.find(m => m.key === selectedMode)?.label)}
         </div>
         <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
           {isPremProvider && selectedMode === "i2v" ? "首帧+人物图参考生成，人物外貌一致，画面起止可控" : (VIDEO_MODES.find(m => m.key === selectedMode)?.desc)} · {VIDEO_PROVIDERS.find(p => p.key === videoProvider)?.desc} · {resolution} {duration}秒 = {currentCredits} 积分（{pricePerSec}积分/秒）
+          {videoProvider === "wan22" && selectedMode === "i2v" && duration >= 30 && (
+            <span style={{ color: "#7A5CFF" }}> · 长视频按 {Math.round(duration / 10)} 段×10秒分段续接，段间首帧自动衔接上一段尾帧，生成时间较长请耐心等待</span>
+          )}
         </div>
+      </div>
+
+      {/* ===== 场景资产（保证场景一致性） ===== */}
+      <div style={{ marginBottom: 16, border: "1px solid var(--border)", borderRadius: 8, background: "var(--panel-2, #1c2433)", overflow: "hidden" }}>
+        <div style={{ padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>🎬 场景资产 <span style={{ fontSize: 10, color: "var(--text-muted, #8b95a7)", fontWeight: 400 }}>（场景参考图+场景设定，保证场景一致性）</span></span>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button
+              style={{ padding: "6px 12px", border: "none", borderRadius: 6, background: "linear-gradient(135deg, #7A5CFF, #5CE1E6)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
+              onClick={analyzeScenes}
+              disabled={analyzingScenes}
+            >
+              {analyzingScenes ? "⏳ 分析中..." : `🔍 分析剧本场景（${getPrice("llm_scene_extract", 1.0)}积分）`}
+            </button>
+            <button
+              style={{ padding: "6px 12px", border: "1px solid #7A5CFF", borderRadius: 6, background: "rgba(122,92,255,0.1)", color: "#7A5CFF", cursor: "pointer", fontSize: 11 }}
+              onClick={() => { setAddingScene(prev => { const next = !prev; if (next) setShowScenePanel(true); return next; }); }}
+            >
+              ➕ 添加场景
+            </button>
+            <button
+              style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "transparent", color: "var(--text-secondary, #8b95a7)", cursor: "pointer", fontSize: 11 }}
+              onClick={() => setShowScenePanel(!showScenePanel)}
+            >
+              {showScenePanel ? "收起 ▲" : `展开 ▼（${scenes.length}）`}
+            </button>
+          </div>
+        </div>
+        {showScenePanel && (
+          <div style={{ padding: "0 14px 14px" }}>
+            {scenes.length === 0 && !addingScene && (
+              <div style={{ padding: 12, textAlign: "center", color: "var(--text-muted, #8b95a7)", fontSize: 12, background: "rgba(122,92,255,0.05)", borderRadius: 6, marginBottom: 10, lineHeight: 1.6 }}>
+                暂无场景资产。<br/>点击「🔍 分析剧本场景」自动从分镜提取整剧场景，或「➕ 添加场景」手动创建。<br/>为场景生成参考图后，在分镜中「选择场景」即可保证场景一致性。
+              </div>
+            )}
+            {/* 添加场景表单 */}
+            {addingScene && (
+              <div style={{ padding: 12, border: "1px solid #7A5CFF", borderRadius: 8, marginBottom: 10, background: "rgba(122,92,255,0.05)" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#7A5CFF", marginBottom: 8 }}>➕ 添加场景</div>
+                <input
+                  placeholder="场景名称（如：雨夜小巷）"
+                  value={newSceneName}
+                  onChange={e => setNewSceneName(e.target.value)}
+                  style={{ width: "100%", padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12, boxSizing: "border-box", marginBottom: 6 }}
+                />
+                <input
+                  placeholder="场景描述（一句话，可选）"
+                  value={newSceneDesc}
+                  onChange={e => setNewSceneDesc(e.target.value)}
+                  style={{ width: "100%", padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12, boxSizing: "border-box", marginBottom: 6 }}
+                />
+                <textarea
+                  placeholder="场景提示词（用于AI生图，可选；留空则用场景名）"
+                  value={newScenePrompt}
+                  onChange={e => setNewScenePrompt(e.target.value)}
+                  style={{ width: "100%", minHeight: 60, padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12, boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }}
+                />
+                <div style={{ display: "flex", gap: 8, marginTop: 8, justifyContent: "flex-end" }}>
+                  <button
+                    style={{ padding: "6px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "transparent", color: "var(--text)", cursor: "pointer", fontSize: 12 }}
+                    onClick={() => { setAddingScene(false); setNewSceneName(""); setNewSceneDesc(""); setNewScenePrompt(""); }}
+                  >取消</button>
+                  <button
+                    style={{ padding: "6px 14px", border: "none", borderRadius: 6, background: "linear-gradient(135deg, #7A5CFF, #5CE1E6)", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+                    onClick={saveNewScene}
+                  >保存</button>
+                </div>
+              </div>
+            )}
+            {/* 场景列表 */}
+            {scenes.map(scene => (
+              <div key={scene.id} style={{ display: "flex", gap: 12, padding: 10, border: "1px solid var(--border)", borderRadius: 8, marginBottom: 8, background: "var(--panel-1, transparent)" }}>
+                <div style={{ width: 88, height: 110, borderRadius: 6, overflow: "hidden", background: "var(--input-bg)", flexShrink: 0, position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {scene.image ? (
+                    <img src={scene.image} alt={scene.name} style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "zoom-in" }} onClick={(e) => { e.stopPropagation(); setPreviewSceneImage(scene.image); }} />
+                  ) : (
+                    <span style={{ fontSize: 26 }}>🏞️</span>
+                  )}
+                  {scene.image && (
+                    <div style={{ position: "absolute", bottom: 2, right: 2, background: "rgba(16,185,129,0.9)", borderRadius: 4, padding: "1px 5px", fontSize: 9, color: "#fff" }}>✓</div>
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {editingScene?.id === scene.id ? (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#7A5CFF", marginBottom: 6 }}>✏️ 修改场景</div>
+                      <input
+                        placeholder="场景名称"
+                        value={editingScene.name}
+                        onChange={e => setEditingScene({ ...editingScene, name: e.target.value })}
+                        style={{ width: "100%", padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12, boxSizing: "border-box", marginBottom: 6 }}
+                      />
+                      <input
+                        placeholder="场景描述"
+                        value={editingScene.desc}
+                        onChange={e => setEditingScene({ ...editingScene, desc: e.target.value })}
+                        style={{ width: "100%", padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12, boxSizing: "border-box", marginBottom: 6 }}
+                      />
+                      <textarea
+                        placeholder="场景提示词（用于AI生图与视频场景设定）"
+                        value={editingScene.prompt}
+                        onChange={e => setEditingScene({ ...editingScene, prompt: e.target.value })}
+                        style={{ width: "100%", minHeight: 56, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12, boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }}
+                      />
+                      <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "flex-end" }}>
+                        <button
+                          style={{ padding: "5px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "transparent", color: "var(--text)", cursor: "pointer", fontSize: 11 }}
+                          onClick={() => setEditingScene(null)}
+                        >取消</button>
+                        <button
+                          style={{ padding: "5px 12px", border: "none", borderRadius: 6, background: "linear-gradient(135deg, #7A5CFF, #5CE1E6)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
+                          onClick={saveEditScene}
+                        >保存</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ fontWeight: 600, fontSize: 13, display: "flex", justifyContent: "space-between", gap: 8 }}>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{scene.name}</span>
+                        <span style={{ fontSize: 9, color: "var(--text-muted, #8b95a7)", flexShrink: 0 }}>{scene.source === "manual" ? "手动" : "AI分析"}</span>
+                      </div>
+                      {scene.desc && <div style={{ fontSize: 10, color: "var(--text-muted, #8b95a7)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{scene.desc}</div>}
+                      <div style={{ fontSize: 11, color: "var(--text-secondary, #8b95a7)", marginTop: 4, lineHeight: 1.5, maxHeight: 50, overflow: "hidden", fontStyle: "italic" }}>{scene.prompt}</div>
+                      <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                        <button
+                          style={{ padding: "5px 10px", border: "none", borderRadius: 5, background: "#10b981", color: "#fff", cursor: "pointer", fontSize: 11 }}
+                          onClick={() => genSceneImage(scene)}
+                          disabled={!!generatingSceneId}
+                        >
+                          {generatingSceneId === scene.id ? "⏳ 生成中..." : `🤖 生成图片（${getPrice("image_generate", 3.0)}积分）`}
+                        </button>
+                        <button
+                          style={{ padding: "5px 10px", border: "1px solid #7A5CFF", borderRadius: 5, background: "rgba(122,92,255,0.1)", color: "#7A5CFF", cursor: "pointer", fontSize: 11 }}
+                          onClick={() => refineScenePrompt(scene)}
+                          disabled={!!refiningSceneId}
+                        >
+                          {refiningSceneId === scene.id ? "⏳ 优化中..." : `✨ 优化提示词（${getPrice("llm_scene_refine", 1.0)}积分）`}
+                        </button>
+                        <button
+                          style={{ padding: "5px 10px", border: "1px solid var(--border)", borderRadius: 5, background: "transparent", color: "var(--text)", cursor: "pointer", fontSize: 11 }}
+                          onClick={() => setEditingScene({ id: scene.id, name: scene.name, desc: scene.desc || "", prompt: scene.prompt || "" })}
+                        >✏️ 修改</button>
+                        <button
+                          style={{ padding: "5px 10px", border: "1px solid #ef4444", borderRadius: 5, background: "transparent", color: "#ef4444", cursor: "pointer", fontSize: 11 }}
+                          onClick={() => deleteScene(scene)}
+                        >🗑 删除</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* R2V首尾帧设置 / 高级·顶级参考首帧设置 */}
@@ -1303,10 +2116,11 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
         <div style={{ marginBottom: 16, padding: "10px 14px", border: "1px solid rgba(16,185,129,0.3)", borderRadius: 8, background: "rgba(16,185,129,0.08)" }}>
           <div style={{ fontSize: 11, color: "#10b981", lineHeight: 1.6 }}>
             {isPremProvider ? (
-              <>✓ 参考首帧+人物图模式：<br/>
+              <>✓ 首帧+人物+场景参考模式：<br/>
                 &nbsp;&nbsp;1. 人物图 = 已生成的角色图（保证人物一致）<br/>
-                &nbsp;&nbsp;2. 首帧来源可选：本分镜分镜图 / 上个视频尾帧 / 手动上传<br/>
-                &nbsp;&nbsp;3. 支持1080P/1:1分辨率，时长1-10秒</>
+                &nbsp;&nbsp;2. 场景图 = 已生成的场景图（保证场景一致，绑定场景后自动并入）<br/>
+                &nbsp;&nbsp;3. 首帧来源可选：本分镜分镜图 / 上个视频尾帧 / 手动上传<br/>
+                &nbsp;&nbsp;4. 支持1080P/1:1分辨率，时长1-10秒</>
             ) : (
               <>✓ i2v模式（minimax_h3_lightx2v_v5）：<br/>
                 &nbsp;&nbsp;1. 人物参考图 = 人物管理中已生成的角色图（保证人物一致，ref_image_0必填）<br/>
@@ -1337,6 +2151,28 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
         </div>
       )}
 
+      {mergeMode && (() => {
+        const selList = allShots.filter(s => mergeSelected[s.id]);
+        const tot = selList.reduce((a, s) => a + (s.duration || duration || 5), 0);
+        const price = getVideoPricePerSec("s2v", resolution, videoProvider);
+        return (
+          <div style={{ position: "sticky", top: 52, zIndex: 15, background: "rgba(122,92,255,0.12)", border: "1px solid #7A5CFF", borderRadius: 10, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#7A5CFF" }}>🎬 合并长视频：已选 {selList.length}/6 个分镜（需 3-6 个，按分镜顺序合并）</span>
+            <button
+              onClick={genMergedLongVideo}
+              disabled={mergingLongVideo || selList.length < 3}
+              style={{ padding: "7px 14px", border: "none", borderRadius: 6, background: "linear-gradient(135deg, #7A5CFF, #5CE1E6)", color: "#fff", cursor: mergingLongVideo || selList.length < 3 ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600, opacity: mergingLongVideo || selList.length < 3 ? 0.6 : 1 }}
+            >
+              {mergingLongVideo ? "⏳ 合并生成中（长视频耗时较长）…" : `合并生成长视频（约${tot}秒 · ${Math.round(tot * price)}积分）`}
+            </button>
+            <button onClick={() => { setMergeMode(false); setMergeSelected({}); }} style={{ padding: "6px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "transparent", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>取消</button>
+            {mergingLongVideo && genProgress.merge && (
+              <span style={{ fontSize: 11, color: genProgress.merge.status === "queued" ? "#f59e0b" : "#10b981", fontWeight: 600 }}>{genProgress.merge.text}</span>
+            )}
+          </div>
+        );
+      })()}
+
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {shots.map(sh => {
           const charImages = getShotCharacterImages(sh);
@@ -1354,7 +2190,12 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
           else if (lastFrameSource === "custom") lastFrameAvailable = !!lastFrameUrl;
           const canR2V = firstFrameAvailable && lastFrameAvailable;
           return (
-            <div key={sh.id} onClick={() => setSelectedShotId(sh.id)} style={{ border: selectedShotId === sh.id ? "2px solid #7A5CFF" : "1px solid var(--border)", borderRadius: 12, padding: 16, background: "var(--panel-2)", cursor: "pointer", transition: "all 0.2s" }}>
+            <div key={sh.id} onClick={() => setSelectedShotId(sh.id)} style={{ border: selectedShotId === sh.id ? "2px solid #7A5CFF" : "1px solid var(--border)", borderRadius: 12, padding: 16, background: mergeSelected[sh.id] ? "rgba(122,92,255,0.1)" : "var(--panel-2)", cursor: "pointer", transition: "all 0.2s", position: "relative" }}>
+              {mergeMode && (
+                <div style={{ position: "absolute", top: 10, left: 10, zIndex: 5 }} onClick={(e) => e.stopPropagation()}>
+                  <input type="checkbox" checked={!!mergeSelected[sh.id]} onChange={() => toggleMergeSelect(sh.id)} style={{ width: 16, height: 16, cursor: "pointer" }} />
+                </div>
+              )}
               <div style={{ display: "flex", gap: 12 }}>
                 <div style={{ width: 120, height: 160, background: "var(--input-bg)", borderRadius: 8, flexShrink: 0, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
                   {sh.videoUrl ? (
@@ -1410,23 +2251,23 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
                 <button
                   style={{ padding: "6px 12px", border: "none", borderRadius: 6, background: "linear-gradient(135deg, #7A5CFF, #5CE1E6)", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}
                   onClick={() => genVideo(sh)}
-                  disabled={busy === sh.id}
+                  disabled={!!busyIds[sh.id]}
                 >
-                  {busy === sh.id ? "⏳ 生成中，请耐心等待…" : `🎬 生成视频 (${currentCredits}积分)`}
+                  {busyIds[sh.id] ? "⏳ 生成中，请耐心等待…" : `🎬 生成视频 (${currentCredits}积分)`}
                 </button>
-                {busy === sh.id && genProgress[sh.id] && (
+                {busyIds[sh.id] && genProgress[sh.id] && (
                   <span style={{ fontSize: 11, color: genProgress[sh.id].status === "queued" ? "#f59e0b" : "#10b981", fontWeight: 600 }}>
                     {genProgress[sh.id].status === "queued" 
                       ? `⏳ ${genProgress[sh.id].text}，预计等待${genProgress[sh.id].queuePosition * 2}分钟`
                       : `🎬 ${genProgress[sh.id].text}`}
                   </span>
                 )}
-                {busy === sh.id && (!genProgress[sh.id] || !genProgress[sh.id].status) && (
+                {busyIds[sh.id] && (!genProgress[sh.id] || !genProgress[sh.id].status) && (
                   <span style={{ fontSize: 11, color: "#f59e0b" }}>
                     ⏱️ 正在提交任务，请稍候…
                   </span>
                 )}
-                {busy !== sh.id && (
+                {!busyIds[sh.id] && (
                   <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
                     💡 高峰期生成可能较慢，请耐心等待
                   </span>
@@ -1440,12 +2281,26 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
                   👤 选择角色 {sh.selectedCharIds?.length > 0 ? `(${sh.selectedCharIds.length})` : ""}
                 </button>
                 <button
+                  style={{ padding: "6px 12px", border: "1px solid #f59e0b", borderRadius: 6, background: sh.selectedSceneId ? "rgba(245,158,11,0.15)" : "transparent", color: "#f59e0b", cursor: "pointer", fontSize: 12 }}
+                  onClick={() => setShowSceneSelect(showSceneSelect === sh.id ? "" : sh.id)}
+                >
+                  🎬 选择场景 {sh.selectedSceneId ? `(${scenes.find(sc => sc.id === sh.selectedSceneId)?.name || "已选"})` : ""}
+                </button>
+                <button
                   style={{ padding: "6px 12px", border: "1px solid #f59e0b", borderRadius: 6, background: "rgba(245,158,11,0.1)", color: "#f59e0b", cursor: refiningShotId ? "wait" : "pointer", fontSize: 12 }}
                   onClick={() => refinePrompt(sh)}
                   disabled={refiningShotId !== ""}
                 >
                   {refiningShotId === sh.id ? "⏳ 细化中..." : "✨ AI细化提示词"}
                 </button>
+                <select
+                  value={refineType}
+                  onChange={e => setRefineType(e.target.value)}
+                  title="选择镜头类型用于AI细化提示词（自动识别/特效/打斗/文戏/氛围/惊悚/运镜/场景）"
+                  style={{ padding: "6px 10px", border: "1px solid #7A5CFF", borderRadius: 6, background: "var(--input-bg)", color: "var(--text)", fontSize: 12 }}
+                >
+                  {REFINE_TEMPLATES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+                </select>
                 <button
                   style={{ padding: "6px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "transparent", color: "var(--text)", cursor: "pointer", fontSize: 12 }}
                   onClick={() => {
@@ -1528,6 +2383,53 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
                   </div>
                 </div>
               )}
+              {/* 场景选择列表 */}
+              {showSceneSelect === sh.id && (
+                <div style={{ marginTop: 12, padding: 12, border: "1px solid #f59e0b", borderRadius: 8, background: "rgba(245,158,11,0.05)" }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#f59e0b", marginBottom: 8 }}>
+                    🎬 选择场景（保证场景一致性：生成视频时自动使用场景参考图 + 并入场景设定）
+                  </div>
+                  {scenes.length === 0 ? (
+                    <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                      暂无场景资产，请先在顶部「🎬 场景资产」面板点击「分析剧本场景」或「添加场景」
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {scenes.map(sc => {
+                        const selected = sh.selectedSceneId === sc.id;
+                        return (
+                          <div
+                            key={sc.id}
+                            onClick={() => toggleSceneSelection(sh, sc.id)}
+                            style={{
+                              width: 88, height: 100, borderRadius: 6, overflow: "hidden", cursor: "pointer",
+                              border: selected ? "2px solid #f59e0b" : "2px solid transparent",
+                              boxShadow: selected ? "0 0 8px rgba(245,158,11,0.5)" : "none",
+                              position: "relative", background: "var(--input-bg)",
+                              display: "flex", alignItems: "center", justifyContent: "center"
+                            }}
+                          >
+                            {sc.image ? (
+                              <img src={sc.image} alt={sc.name} style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "zoom-in" }} onClick={(e) => { e.stopPropagation(); setPreviewSceneImage(sc.image); }} />
+                            ) : (
+                              <span style={{ fontSize: 24 }}>🏞️</span>
+                            )}
+                            {selected && (
+                              <div style={{ position: "absolute", top: 2, right: 2, background: "#f59e0b", color: "#fff", borderRadius: "50%", width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10 }}>✓</div>
+                            )}
+                            <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: "rgba(0,0,0,0.7)", color: "#fff", fontSize: 9, padding: "2px 4px", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sc.name}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div style={{ marginTop: 8, fontSize: 10, color: "var(--text-muted)" }}>
+                    {sh.selectedSceneId
+                      ? `已选场景：${scenes.find(sc => sc.id === sh.selectedSceneId)?.name || "（场景已删除）"}`
+                      : "未选择场景（默认不使用场景参考）"} · 点击场景卡片可选中/取消（单选）
+                  </div>
+                </div>
+              )}
               {/* 模块内编辑提示词区域 */}
               {editingShotId === sh.id && (
                 <div style={{ marginTop: 12, padding: 12, border: "1px solid #7A5CFF", borderRadius: 8, background: "rgba(122,92,255,0.05)" }}>
@@ -1566,6 +2468,14 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
           );
         })}
       </div>
+      {previewSceneImage && (
+        <div
+          onClick={() => setPreviewSceneImage("")}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-out" }}
+        >
+          <img src={previewSceneImage} alt="场景大图" style={{ maxWidth: "90%", maxHeight: "90%", objectFit: "contain", borderRadius: 8 }} />
+        </div>
+      )}
     </div>
   );
 }

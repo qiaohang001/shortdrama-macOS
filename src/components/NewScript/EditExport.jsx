@@ -7,13 +7,25 @@ const TRACK_HEIGHT = 48;
 const TIMELINE_HEIGHT = 260;
 
 // 比例选项
-const ASPECT_RATIOS = [
-  { id: "16:9", label: "16:9 横屏", w: 1920, h: 1080 },
+const ASPECT_RATIOS = [  { id: "16:9", label: "16:9 横屏", w: 1920, h: 1080 },
   { id: "9:16", label: "9:16 竖屏", w: 1080, h: 1920 },
   { id: "1:1", label: "1:1 方形", w: 1080, h: 1080 },
   { id: "4:3", label: "4:3 标准", w: 1440, h: 1080 },
   { id: "3:4", label: "3:4 竖版", w: 1080, h: 1440 },
 ];
+
+// 字体选项（值 = ASS/CSS 字体族名，Windows 系统自带，导出 libass 可直接渲染）
+const FONT_OPTIONS = [
+  { value: "", label: "默认" },
+  { value: "SimHei", label: "黑体" },
+  { value: "SimSun", label: "宋体" },
+  { value: "KaiTi", label: "楷体" },
+  { value: "FangSong", label: "仿宋" },
+  { value: "Microsoft YaHei", label: "微软雅黑" },
+  { value: "DengXian", label: "等线" },
+];
+// 文本背景色选项
+const TEXT_BG_COLORS = ["#000000", "#1e1e1e", "#ffffff", "#ff0000", "#7a5cff", "#f59e0b", "#0ea5e9", "#16a085"];
 
 // 滤镜选项
 const FILTERS = [
@@ -1087,10 +1099,21 @@ export function EditExport({ project, update, log, incomingAssets = [], onConsum
         });
       }
 
+      // 字号换算：预览画面高度 → 导出高度（保持视觉占比一致）
+      const previewH = videoRef.current?.getBoundingClientRect?.()?.height || 540;
+      const scale = Math.max(0.1, (ratio?.h || 1080) / Math.max(1, previewH));
       const texts = textClips.map((t) => ({
         start: t.start || 0,
         duration: t.duration || 3,
         text: `${t.character ? t.character + "：" : ""}${t.text || ""}`,
+        fontSize: Math.round((t.fontSize || 20) * scale),
+        color: t.color || "#ffffff",
+        position: t.position || "bottom",
+        hAlign: t.hAlign || "center",
+        fontFamily: t.fontFamily || "",
+        bold: !!t.bold,
+        bgColor: t.bgColor || "#000000",
+        bgOpacity: t.bgOpacity ?? 70,
       }));
 
       log?.(`正在合成 ${clips.length} 段视频 + ${audios.length} 段音频…`);
@@ -1284,11 +1307,13 @@ export function EditExport({ project, update, log, incomingAssets = [], onConsum
             {/* video 元素必须常驻 DOM：旧写法在没有 currentClip 时整个卸载，
                 videoRef 变成 null，播放器直接失效。src 由播放引擎 imperative 设置，
                 不再交给 React（避免每次 currentTime 变化都触发重新加载）。 */}
+            {/* 视频画面 wrapper：aspectRatio 锚定实际画面区域，字幕/文本相对画面定位，不会跑出视频外 */}
+            <div style={{ position: "relative", aspectRatio: `${ASPECT_RATIOS.find(r => r.id === aspectRatio)?.w || 16} / ${ASPECT_RATIOS.find(r => r.id === aspectRatio)?.h || 9}`, maxWidth: "100%", maxHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <video
               ref={videoRef}
               playsInline
               preload="auto"
-              style={{ maxHeight: "100%", maxWidth: "100%", objectFit: "contain", filter: currentFilter || "none", display: currentClip ? "block" : "none" }}
+              style={{ width: "100%", height: "100%", objectFit: "fill", filter: currentFilter || "none", display: currentClip ? "block" : "none" }}
             />
             {/* 音频轨道播放元素（此前缺失，音频轨从未真正发声） */}
             <audio ref={audioRef} preload="auto" style={{ display: "none" }} />
@@ -1301,29 +1326,44 @@ export function EditExport({ project, update, log, incomingAssets = [], onConsum
             )}
             {currentClip && <div style={{ position: "absolute", top: 10, left: 10, background: "rgba(0,0,0,0.6)", padding: "3px 8px", borderRadius: 4, fontSize: 11 }}>{currentClip.title}</div>}
             
-            {/* 显示当前时间的文本字幕 */}
-            {textClips.filter(tc => currentTime >= tc.start && currentTime < tc.start + tc.duration).map(tc => (
-              <div key={tc.id} style={{
-                position: "absolute",
-                bottom: tc.position === "top" ? 60 : 30,
-                top: tc.position === "top" ? 30 : "auto",
-                left: "50%",
-                transform: "translateX(-50%)",
-                background: "rgba(0,0,0,0.7)",
-                color: tc.color || "#ffffff",
-                fontSize: tc.fontSize || 20,
-                padding: "6px 16px",
-                borderRadius: 6,
-                maxWidth: "80%",
-                textAlign: "center",
-                fontWeight: 600,
-                textShadow: "0 1px 3px rgba(0,0,0,0.8)",
-                zIndex: 5,
-              }}>
-                {tc.character && <span style={{ color: "#5ce1e6", marginRight: 8 }}>{tc.character}：</span>}
-                {tc.text}
-              </div>
-            ))}
+            {/* 显示当前时间的文本字幕（相对视频画面定位：top/middle/bottom + left/center/right，强制换行防溢出） */}
+            {textClips.filter(tc => currentTime >= tc.start && currentTime < tc.start + tc.duration).map(tc => {
+              const vPos = tc.position === "top" ? "6%" : tc.position === "middle" ? "50%" : "88%";
+              const hAlignVal = tc.hAlign === "left" ? "8%" : tc.hAlign === "right" ? "92%" : "50%";
+              const hTransform = tc.hAlign === "left" ? "translate(0,-50%)" : tc.hAlign === "right" ? "translate(-100%,-50%)" : "translate(-50%,-50%)";
+              const hTextAlign = tc.hAlign === "left" ? "left" : tc.hAlign === "right" ? "right" : "center";
+              const bgHex = tc.bgColor || "#000000";
+              const bgOp = tc.bgOpacity ?? 70;
+              const bgR = parseInt(bgHex.slice(1, 3), 16) || 0;
+              const bgG = parseInt(bgHex.slice(3, 5), 16) || 0;
+              const bgB = parseInt(bgHex.slice(5, 7), 16) || 0;
+              return (
+                <div key={tc.id} style={{
+                  position: "absolute",
+                  left: hAlignVal,
+                  top: vPos,
+                  transform: hTransform,
+                  background: bgOp > 0 ? `rgba(${bgR},${bgG},${bgB},${(bgOp / 100).toFixed(2)})` : "transparent",
+                  color: tc.color || "#ffffff",
+                  fontSize: tc.fontSize || 20,
+                  fontFamily: tc.fontFamily || undefined,
+                  fontWeight: tc.bold ? 700 : 600,
+                  padding: bgOp > 0 ? "6px 16px" : "2px 6px",
+                  borderRadius: 6,
+                  maxWidth: "92%",
+                  textAlign: hTextAlign,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  lineHeight: 1.4,
+                  textShadow: bgOp > 0 ? "none" : "0 1px 3px rgba(0,0,0,0.9)",
+                  zIndex: 5,
+                }}>
+                  {tc.character && <span style={{ color: "#5ce1e6", marginRight: 8 }}>{tc.character}：</span>}
+                  {tc.text}
+                </div>
+              );
+            })}
+            </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderTop: "1px solid #2a2a4a", background: "#16162a" }}>
             <button onClick={() => seekTo(currentTime - 5)} style={playBtn}>⏮</button>
@@ -1387,6 +1427,59 @@ export function EditExport({ project, update, log, incomingAssets = [], onConsum
                       style={{ width: "100%" }}
                     />
                   </div>
+
+                  {/* 字体 */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>字体</div>
+                    <select
+                      value={selectedClip.fontFamily || ""}
+                      onChange={(e) => setTextClips(prev => prev.map(c => c.id === selectedClipId ? { ...c, fontFamily: e.target.value } : c))}
+                      style={{ width: "100%", padding: "4px 6px", background: "#1e1e35", border: "1px solid #2a2a4a", borderRadius: 4, color: "#fff", fontSize: 11 }}
+                    >
+                      {FONT_OPTIONS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                    </select>
+                  </div>
+
+                  {/* 加粗 */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>加粗</div>
+                    <button
+                      onClick={() => setTextClips(prev => prev.map(c => c.id === selectedClipId ? { ...c, bold: !c.bold } : c))}
+                      style={{ width: "100%", padding: "4px 0", border: selectedClip.bold ? "1px solid #5ce1e6" : "1px solid #2a2a4a", borderRadius: 4, background: selectedClip.bold ? "rgba(92,225,230,0.1)" : "#1e1e35", color: selectedClip.bold ? "#5ce1e6" : "#aaa", fontSize: 11, cursor: "pointer", fontWeight: 700 }}
+                    >B 粗体{selectedClip.bold ? " ✓" : ""}</button>
+                  </div>
+
+                  {/* 背景色 */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>背景色</div>
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+                      <button
+                        onClick={() => setTextClips(prev => prev.map(c => c.id === selectedClipId ? { ...c, bgColor: "#000000", bgOpacity: 0 } : c))}
+                        style={{ width: 20, height: 20, border: "1px dashed #888", borderRadius: 3, cursor: "pointer", background: "transparent", fontSize: 9, color: "#888", display: "flex", alignItems: "center", justifyContent: "center" }}
+                        title="无背景"
+                      >无</button>
+                      {TEXT_BG_COLORS.map(color => (
+                        <button
+                          key={color}
+                          onClick={() => setTextClips(prev => prev.map(c => c.id === selectedClipId ? { ...c, bgColor: color, bgOpacity: (c.bgOpacity ?? 70) || 70 } : c))}
+                          style={{ width: 20, height: 20, background: color, border: (selectedClip.bgColor || "#000000") === color && (selectedClip.bgOpacity ?? 70) > 0 ? "2px solid #5ce1e6" : "1px solid #444", borderRadius: 3, cursor: "pointer" }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 背景不透明度 */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>背景不透明度：{selectedClip.bgOpacity ?? 70}%</div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={selectedClip.bgOpacity ?? 70}
+                      onChange={(e) => setTextClips(prev => prev.map(c => c.id === selectedClipId ? { ...c, bgOpacity: parseInt(e.target.value) } : c))}
+                      style={{ width: "100%" }}
+                    />
+                  </div>
                   
                   {/* 字体颜色 */}
                   <div style={{ marginBottom: 10 }}>
@@ -1402,18 +1495,31 @@ export function EditExport({ project, update, log, incomingAssets = [], onConsum
                     </div>
                   </div>
                   
-                  {/* 位置 */}
+                  {/* 垂直位置：顶部/中部/底部 */}
                   <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>位置</div>
+                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>垂直位置</div>
                     <div style={{ display: "flex", gap: 4 }}>
-                      <button 
-                        onClick={() => setTextClips(prev => prev.map(c => c.id === selectedClipId ? { ...c, position: "top" } : c))}
-                        style={{ flex: 1, padding: "4px 0", border: selectedClip.position === "top" ? "1px solid #5ce1e6" : "1px solid #2a2a4a", borderRadius: 4, background: selectedClip.position === "top" ? "rgba(92,225,230,0.1)" : "#1e1e35", color: selectedClip.position === "top" ? "#5ce1e6" : "#aaa", fontSize: 10, cursor: "pointer" }}
-                      >顶部</button>
-                      <button 
-                        onClick={() => setTextClips(prev => prev.map(c => c.id === selectedClipId ? { ...c, position: "bottom" } : c))}
-                        style={{ flex: 1, padding: "4px 0", border: selectedClip.position !== "top" ? "1px solid #5ce1e6" : "1px solid #2a2a4a", borderRadius: 4, background: selectedClip.position !== "top" ? "rgba(92,225,230,0.1)" : "#1e1e35", color: selectedClip.position !== "top" ? "#5ce1e6" : "#aaa", fontSize: 10, cursor: "pointer" }}
-                      >底部</button>
+                      {[["top", "顶部"], ["middle", "中部"], ["bottom", "底部"]].map(([val, label]) => (
+                        <button 
+                          key={val} 
+                          onClick={() => setTextClips(prev => prev.map(c => c.id === selectedClipId ? { ...c, position: val } : c))}
+                          style={{ flex: 1, padding: "4px 0", border: (selectedClip.position || "bottom") === val ? "1px solid #5ce1e6" : "1px solid #2a2a4a", borderRadius: 4, background: (selectedClip.position || "bottom") === val ? "rgba(92,225,230,0.1)" : "#1e1e35", color: (selectedClip.position || "bottom") === val ? "#5ce1e6" : "#aaa", fontSize: 10, cursor: "pointer" }}
+                        >{label}</button>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  {/* 水平对齐：左/中/右 */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>水平对齐</div>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {[["left", "左"], ["center", "中"], ["right", "右"]].map(([val, label]) => (
+                        <button 
+                          key={val} 
+                          onClick={() => setTextClips(prev => prev.map(c => c.id === selectedClipId ? { ...c, hAlign: val } : c))}
+                          style={{ flex: 1, padding: "4px 0", border: (selectedClip.hAlign || "center") === val ? "1px solid #5ce1e6" : "1px solid #2a2a4a", borderRadius: 4, background: (selectedClip.hAlign || "center") === val ? "rgba(92,225,230,0.1)" : "#1e1e35", color: (selectedClip.hAlign || "center") === val ? "#5ce1e6" : "#aaa", fontSize: 10, cursor: "pointer" }}
+                        >{label}</button>
+                      ))}
                     </div>
                   </div>
                   
