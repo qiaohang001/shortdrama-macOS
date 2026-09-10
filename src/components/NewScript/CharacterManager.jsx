@@ -43,7 +43,7 @@ export function detectStyleKey(text) {
   return "";
 }
 
-// 基础提示词（不含风格描述，供剧本分析/细化/存储使用，生成图片时再注入风格）
+// 基础提示词（不含风格描述与画面布局，供剧本分析/细化/存储使用；布局与风格在生成图片时注入）
 export function buildCharacterBasePrompt(char) {
   const appearance = char.appearance || "";
   const personality = char.personality || "";
@@ -51,7 +51,24 @@ export function buildCharacterBasePrompt(char) {
   const genderHint = /(男主|先生|总裁|少爷|哥哥|弟弟|父亲|儿子|男|他)/.test(role + char.name + personality) ? "男性" :
                      /(女主|小姐|夫人|公主|姐姐|妹妹|母亲|女儿|女|她)/.test(role + char.name + personality) ? "女性" : "";
   const typeLayer = getTypeLayer(appearance, role, char.name);
-  return `角色设定三视图加面部特写，${char.name}${genderHint ? "，" + genderHint : ""}，${role}，${appearance}，性格气质：${personality}。画面布局：上排并排展示同一角色三个全身视角——正面视图、侧面视图、背面视图；下排中央展示该角色上半身面部特写（胸部以上）。所有视图和特写中角色外貌完全一致：相同面部五官/头部结构、发型发色、服装款式与颜色、配饰、体型肤色，严格保持角色一致性。全身像自然站立姿势，双臂自然下垂，双脚与肩同宽。面部特写表情自然正视镜头，五官/头部细节清晰。纯白色无背景，无阴影，无环境元素，纯净角色设定图。${QUALITY_LAYER}，${typeLayer}，四个画面外貌完全统一。注意：此角色为「${char.name}」，请根据其身份「${role}」和性格「${personality}」生成独特的外貌和服装，不要与其他角色混淆。负面提示：${NEGATIVE_PROMPT}`;
+  return `${char.name}${genderHint ? "，" + genderHint : ""}，${role}，${appearance}，性格气质：${personality}。${QUALITY_LAYER}，${typeLayer}。注意：此角色为「${char.name}」，请根据其身份「${role}」和性格「${personality}」生成独特的外貌和服装，不要与其他角色混淆。负面提示：${NEGATIVE_PROMPT}`;
+}
+
+// 从角色数据/细化提示词中提取纯外貌描述（去掉布局前缀、画面布局段、画面段、负面提示段），供细化与各生图布局复用
+export function extractAppearance(char) {
+  const existing = (char.promptCn || "").trim();
+  const appearance = char.appearance || "";
+  const personality = char.personality || "";
+  const role = char.role || "";
+  return (existing.split("画面布局")[0] || "")
+    .trim()
+    .replace(/^角色设定三视图加面部特写[，,、。]?\s*/, "")
+    .replace(/^角色设定图[，,、。]?\s*/, "")
+    .replace(/^三视图加面部特写[，,、。]?\s*/, "")
+    .split("画面：")[0]
+    .split("画面:")[0]
+    .split("负面提示")[0]
+    .trim() || `${char.name}，${role}，${appearance}，性格气质：${personality}`.replace(/[，,]+$/, "");
 }
 
 // 完整提示词 = 基础提示词 + 风格描述（生成人物图片时使用）
@@ -65,20 +82,19 @@ export function buildCharacterLockPrompt(char) {
   const appearance = char.appearance || "";
   const personality = char.personality || "";
   const role = char.role || "";
-  const existing = (char.promptCn || "").trim();
-  // 复用细化提示词里的外貌描述部分（"画面布局"之前），保留完整外貌/服饰/配饰细节；
-  // 去掉开头的"角色设定三视图加面部特写"等布局前缀残留，避免与单图锁定要求矛盾；
-  // 若细化提示词已含"画面："段落（布局/构图描述），截断避免与锁定画面要求重复
-  const descPart = (existing.split("画面布局")[0] || "")
-    .trim()
-    .replace(/^角色设定三视图加面部特写[，,、]?\s*/, "")
-    .replace(/^角色设定图[，,、]?\s*/, "")
-    .replace(/^三视图加面部特写[，,、]?\s*/, "")
-    .split("画面：")[0]
-    .split("画面:")[0]
-    .trim() || `${char.name}，${role}，${appearance}，性格气质：${personality}`.replace(/[，,]+$/, "");
+  const descPart = extractAppearance(char);
   const typeLayer = getTypeLayer(appearance, role, char.name);
   return `${descPart}。画面：一张全身照片，镜头正对人物正面，画面中只有一个人物（严禁第二个人物、严禁多视图拼图、严禁镜像倒影），全身完整入镜（头顶至脚底），自然站立，双臂自然下垂，双脚与肩同宽，面部正视镜头，表情沉稳。背景为纯白色摄影棚背景，无任何环境元素。${QUALITY_LAYER}，${typeLayer}。注意：此角色为「${char.name}」，请严格保持其外貌、服装与配饰的完整性和辨识度，不要改变或简化。负面提示：双人，多个人物，第二个人物，第三人，多人组合，多视图，三视图，多角度，拼图，并排，镜像，倒影，剪影，侧面视角，背面视角，${NEGATIVE_PROMPT}`;
+}
+
+// 三视图+面部特写展示图提示词（四宫格布局，供人物卡/素材展示；不参与视频锁定）
+export function buildCharacterSheetPrompt(char) {
+  const appearance = char.appearance || "";
+  const personality = char.personality || "";
+  const role = char.role || "";
+  const descPart = extractAppearance(char);
+  const typeLayer = getTypeLayer(appearance, role, char.name);
+  return `${descPart}。画面布局：上排并排展示同一角色三个全身视角——正面视图、侧面视图、背面视图；下排中央展示该角色上半身面部特写（胸部以上）。所有视图和特写中角色外貌完全一致：相同面部五官/头部结构、发型发色、服装款式与颜色、配饰、体型肤色，严格保持角色一致性。全身像自然站立姿势，双臂自然下垂，双脚与肩同宽。面部特写表情自然正视镜头，五官/头部细节清晰。纯白色无背景，无阴影，无环境元素，纯净角色设定图。${QUALITY_LAYER}，${typeLayer}，四个画面外貌完全统一。注意：此角色为「${char.name}」，请严格保持其外貌、服装与配饰的完整性和辨识度，不要改变或简化。负面提示：${NEGATIVE_PROMPT}`;
 }
 
 // 生成图片时向已有提示词注入风格描述（插在"负面提示"之前；已含则不重复）
@@ -269,7 +285,7 @@ ${content.slice(0, 5000)}
     setRefiningCharId(char.id);
     log(`正在细化「${char.name}」人物提示词...`);
     try {
-      const current = (char.promptCn || buildCharacterBasePrompt(char)).trim();
+      const current = extractAppearance(char).trim();
       const prompt = `你是专业的AI生图提示词工程师。请细化以下角色设定图的生图提示词，使其更精致、细节更丰富，可直接用于AI生图。
 细化方向（必须逐项加强细节）：
 1. 整体穿着：服装款式、颜色、面料材质、纹理纹样、层次搭配、腰带/玉佩/披风/护腕等配饰；
@@ -277,8 +293,8 @@ ${content.slice(0, 5000)}
 3. 头发细节：发型、发长、发色、刘海/发髻/发冠/发饰；
 4. 体型与随身道具。
 要求：
-1. 布局唯一：严格沿用原提示词开头指定的画面布局（如"角色设定三视图加面部特写"或"画面：一张全身照片"），全篇只保留这一种布局描述；若原提示词同时混入了其他视图/构图描述（多视图、拼图、镜像、侧面背面视角、多角度、全身照与三视图并存等），一律删除，只保留开头指定的那一种布局；
-2. 负面提示与布局一致：三视图+面部特写布局时，负面提示不得包含"严禁多视图/多视图拼图/单张全身照"等与布局冲突的禁词；单张全身照布局时，负面提示应保留"严禁多视图、拼图、镜像、侧面背面视角"等禁词。
+1. 不要包含任何画面布局/视图/构图描述（如三视图、多视图、单张全身照、拼图、镜像、侧面背面视角等），画面布局由生图时统一注入；
+2. 负面提示使用通用禁词（模糊、低分辨率、变形、塑料感、AI感等），不要包含视图/布局相关禁词；
 3. 不要包含任何风格/画风描述（如动漫、写实、武侠、奇幻等），风格由生成时统一注入；
 4. 150-260字；
 5. 只输出细化后的完整提示词本身，不要解释、不要markdown代码块。
@@ -419,7 +435,7 @@ ${content.slice(0, 5000)}
     try {
       const styleObj = STYLE_OPTIONS.find(s => s.value === selectedStyle) || STYLE_OPTIONS[0];
       // 三视图展示图 = 四宫格布局（正/侧/背全身 + 面部特写），供人物卡/素材展示
-      const basePrompt = (char.promptCn && char.promptCn.trim().length > 0) ? char.promptCn.trim() : buildCharacterBasePrompt(char);
+      const basePrompt = buildCharacterSheetPrompt(char);
       const prompt = injectStyleDesc(basePrompt, styleObj.desc);
       const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1328x1328", n: 1 });
       const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;

@@ -1,3 +1,10 @@
+// TITLE_PROBE: 主入口打点
+document.title = "TITLE_PROBE:MAIN_START:" + Date.now();
+window.addEventListener("error", (e) => { try { document.title = "TITLE_PROBE:ERR:" + (e.message || "unknown"); } catch(_) {} });
+window.addEventListener("unhandledrejection", (e) => { try { document.title = "TITLE_PROBE:REJ:" + String(e.reason); } catch(_) {} });
+
+
+
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.jsx";
@@ -13,6 +20,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 async function bootstrap() {
+  document.title = "TITLE_PROBE:BEFORE_RENDER:" + Date.now();
   // JINSU-0903: 防御 root 挂载点缺失导致的空白窗口
   const mount = document.getElementById("root");
   if (!mount) {
