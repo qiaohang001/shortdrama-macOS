@@ -140,8 +140,54 @@ const VIDEO_STYLES = [
   { key: "comedy", label: "喜剧风格", desc: "Comedy style, bright colors, cheerful atmosphere, exaggerated expressions" },
 ];
 
-// 视频生成提示词固定后缀（所有模式都加入）
-const PROMPT_FIXED_SUFFIX = "专业影视级，高清细节，画面流畅";
+// ─── 全局画质前置词库（按视频风格注入，替代旧固定后缀；硬性约束全风格生效）───
+const QUALITY_PREFIXES = {
+  cinematic: "8K超高清院线电影级画质，超高细节纹理，4K渲染输出。ARRI Alexa 65大画幅电影机质感，动态宽容度拉满；50mm标准定焦镜头，f/2.8浅景深，焦点精准锁定人物主体；柯达5219电影胶片质感，细腻自然颗粒，色彩柔和不锐化过度；24fps标准电影帧率，2.39:1宽银幕画幅。",
+  realistic: "8K超高清写实画质，超高细节纹理，4K渲染输出。真实摄影机质感，50mm标准定焦镜头，f/2.8浅景深焦点精准锁定人物；真实亚洲人种皮肤质感，自然面部微表情，毛细血管细微可见，光影层次真实自然，拒绝过度磨皮与重度美白。",
+  anime: "日系动漫电影级画质，吉卜力手绘质感与细腻光影结合，画面干净通透；色彩鲜明柔和，赛璐璐复古上色搭配新海诚式光影氛围，线条清晰流畅，背景细节丰富。",
+  noir: "黑白胶片电影质感，高反差明暗对比，深邃阴影，细腻颗粒，40年代黑色电影美学，低调戏剧性打光，影调层次丰富。",
+  cyberpunk: "赛博朋克电影质感，红蓝霓虹对比光，雨夜反光地面，高饱和低亮度，未来都市细节丰富，电影级景深与颗粒。",
+  fantasy: "奇幻电影级画质，魔法氛围光影，粒子光效细腻，梦幻色彩层次，史诗级场景渲染，超高细节纹理。",
+  horror: "恐怖电影质感，压抑暗调，受限光源，高对比阴影，阴冷色调，氛围压迫，电影级噪点颗粒，细节真实。",
+  comedy: "明亮喜剧电影质感，高调柔和布光，色彩明快饱满，画面干净通透，电影级细节与景深。",
+};
+const QUALITY_HARD_RULES = "全局硬性约束：全程无超帧、无画面畸变扭曲、无多余空镜、无穿帮道具、人物口型与台词1:1精准同步；无AI失真脸部，皮肤保留原生毛孔肌理，拒绝过度磨皮、重度美白；人物四肢手部动作自然无畸形，五官脸型全程统一，服装发型配饰前后镜头无改动；画面流畅无抖动、无闪烁卡顿、无崩坏肢体，阴影过渡柔和，无塑料假人质感。";
+const DEFAULT_QUALITY_PREFIX = "8K超高清电影级画质，超高细节纹理，4K渲染输出，专业影视级画面，自然光影与真实质感。";
+function getQualityPrefix(styleKey) {
+  return QUALITY_PREFIXES[styleKey] || DEFAULT_QUALITY_PREFIX;
+}
+
+// ─── 专业光影库（8套成套光影方案，细化提示词时按情绪推荐并注入）───
+const LIGHTING_LIBRARY = [
+  { key: "rembrandt", name: "伦勃朗光", desc: "全局光影：单侧硬光主灯+弱辅光，人物脸颊形成标志性三角光斑，后方窄轮廓光分离背景，色温4200K，光线聚焦人物面部，明暗层次分明，氛围感压抑伤感", emotions: ["单人情绪", "悬疑", "文艺", "压抑"] },
+  { key: "butterfly", name: "蝴蝶光", desc: "全局光影：正面高位柔光主灯，下方反光板弱化暗部阴影，色温5500K，柔和低对比，整体治愈温柔氛围", emotions: ["甜宠", "温柔", "女主", "恋爱", "浪漫"] },
+  { key: "golden_backlight", name: "黄昏侧逆光", desc: "全局光影：夕阳暖调侧逆光，色温3200K，强发丝轮廓光，正面低亮度柔光辅光，冷暖撞色，温柔伤感氛围感", emotions: ["离别", "黄金时刻", "黄昏", "伤感", "回忆"] },
+  { key: "three_point_soft", name: "三点柔光", desc: "全局光影：正面柔光主光+侧辅光+背部轮廓光，色温5500K，明暗过渡平缓，日常松弛治愈氛围", emotions: ["日常", "居家", "办公室", "对话", "平静"] },
+  { key: "hard_single", name: "悬疑单硬光", desc: "全局光影：顶部单侧硬光主光源，色温4000K，无多余辅光，极高明暗对比，大面积深邃暗部，紧张压抑悬疑氛围", emotions: ["密室", "对峙", "惊悚", "恐怖", "压迫"] },
+  { key: "blue_city_night", name: "蓝调城市夜景光", desc: "全局光影：天空冷蓝环境光7000K，搭配街边暖黄辅光，伦勃朗光塑造人物面部，冷暖对冲，孤独压抑氛围", emotions: ["都市", "孤独", "夜景", "雨夜", "失落"] },
+  { key: "kerosene_warm", name: "煤油暖黄光", desc: "全局光影：单盏煤油灯侧方暖黄主光，色温2600K，低亮度辅光提亮眼窝，面部形成伦勃朗三角光斑，厚重沉郁离别氛围", emotions: ["夜晚", "室内", "离别", "烛火", "沉重"] },
+  { key: "cyber_contrast", name: "赛博朋克对比光", desc: "全局光影：红蓝双色霓虹分侧对冲打光，混合色温，低亮度环境，高色彩反差，赛博氛围感", emotions: ["赛博", "霓虹", "科幻", "都市夜"] },
+];
+const EMOTION_LIGHTING_MAP = [
+  { keywords: ["密室", "对峙", "惊悚", "恐怖", "压迫", "悬疑", "诡异", "紧张"], light: "hard_single" },
+  { keywords: ["甜宠", "温柔", "恋爱", "浪漫", "暧昧", "甜蜜", "亲密"], light: "butterfly" },
+  { keywords: ["离别", "黄昏", "夕阳", "伤感", "回忆", "黄金时刻", "日落"], light: "golden_backlight" },
+  { keywords: ["日常", "居家", "办公室", "对话", "平静", "叙述", "温馨"], light: "three_point_soft" },
+  { keywords: ["都市", "孤独", "夜景", "雨夜", "失落", "霓虹街", "城市"], light: "blue_city_night" },
+  { keywords: ["夜晚", "室内", "烛火", "沉重", "煤油", "深夜"], light: "kerosene_warm" },
+  { keywords: ["赛博", "霓虹", "科幻", "未来都市", "机械"], light: "cyber_contrast" },
+  { keywords: ["单人", "文艺", "压抑", "情绪", "内心"], light: "rembrandt" },
+];
+function recommendLighting(desc, title, dialogue) {
+  const text = (desc + title + dialogue).toLowerCase();
+  for (const m of EMOTION_LIGHTING_MAP) {
+    if (m.keywords.some(k => text.includes(k))) {
+      const lib = LIGHTING_LIBRARY.find(l => l.key === m.light);
+      if (lib) return lib;
+    }
+  }
+  return LIGHTING_LIBRARY[3]; // 默认三点柔光，中性安全
+}
 
 // 专业运镜库（每种带精确参数描述）
 const CAMERA_MOVES = {
@@ -155,7 +201,9 @@ const CAMERA_MOVES = {
   orbit: { name: "环绕镜头", desc: "镜头围绕主体缓慢环绕半圈到一圈，360度展示人物或物体，强调主体重要性，速度均匀" },
   whip_pan: { name: "快速甩镜", desc: "快速水平摇动镜头，画面产生运动模糊拖影，用于急促转场或动作切换，制造强烈节奏感" },
   low_angle: { name: "低机位仰拍", desc: "低角度仰拍主体，主体显得高大有压迫感，适合反派登场、力量展示、气势营造" },
-  top_down: { name: "俯拍上帝视角", desc: "高角度垂直俯拍，展示全局空间布局，适合场面调度、孤独感、战场全景" }
+  top_down: { name: "俯拍上帝视角", desc: "高角度垂直俯拍，展示全局空间布局，适合场面调度、孤独感、战场全景" },
+  steadicam: { name: "斯坦尼康跟拍", desc: "佩戴斯坦尼康稳定器跟随主体平滑移动，画面稳定无晃动兼具运动感，适合长镜头跟拍、走廊行进、连续动作场景，镜头距主体2-3米" },
+  macro: { name: "微距特写", desc: "镜头贴近主体进行微距拍摄，突出细微细节（瞳孔、物件纹理、水滴、绣纹），浅景深虚化背景，强化凝视感与情绪张力" }
 };
 
 // 情绪→运镜自动映射（关键词匹配）
@@ -547,6 +595,17 @@ ${cameraLibText}
 2. 推荐运镜：${recommendedCam.name}（${recommendedCam.reason}），如无更合适的选择请使用此推荐
 3. 运镜描述要具体到：镜头距离、运动速度、晃动幅度、主体位置关系
 4. 不要使用"平稳跟随跟镜"这种模糊描述
+
+【专业光影库】（必须从中选择一套作为本分镜的光影方案）
+${LIGHTING_LIBRARY.map(v => `${v.name}：${v.desc}`).join("\n")}
+
+【光影选择规则】
+1. 推荐光影：${recommendLighting(desc, sh.title || "", dialogue).name}（${recommendLighting(desc, sh.title || "", dialogue).desc}），如情绪匹配度更高可另选库内其他方案
+2. 每段时间分段都必须写明本段采用的光影方案（光源类型+色温+方向+明暗对比），不要只写"灯光柔和"这类模糊描述
+3. 光影要与镜头情绪一致，可随剧情节奏在同一分镜内做光影微调（如从暗到亮）
+
+【全局画质硬性约束】（必须贯穿全部分镜描述）
+无AI失真脸部，皮肤保留原生毛孔肌理，拒绝过度磨皮、重度美白；人物四肢手部动作自然无畸形，五官脸型全程统一，服装发型配饰前后镜头无改动；画面流畅无抖动、无闪烁卡顿、无崩坏肢体，阴影过渡柔和，无塑料假人质感；人物口型与台词1:1精准同步。
 
 【镜头类型】本分镜按「${refineTpl.label}」细化：
 ${refineTpl.guide}
@@ -960,19 +1019,20 @@ ${shotTexts}`;
       const eventFullDesc = eventTitle ? `${eventTitle}。${eventDesc}` : eventDesc;
 
       // 视频提示词：如果有AI细化后的提示词，直接使用；否则用中文模板构建
+      // 画质前置词（按风格选择）统一放最前，硬性约束全风格生效
+      const qualityPrefix = getQualityPrefix(selectedStyle);
       let videoPrompt;
       if (sh.promptCn && sh.promptCn.length > 50) {
         videoPrompt = sh.promptCn;
-        // 在AI细化提示词后面追加风格描述、构图描述和固定后缀
+        // 在AI细化提示词前后追加：画质前置词（前缀）+ 风格描述、构图描述
         const suffixParts = [];
         if (styleDesc) suffixParts.push(styleDesc);
         if (compositionDesc) suffixParts.push(compositionDesc);
-        suffixParts.push(PROMPT_FIXED_SUFFIX);
-        videoPrompt = `${videoPrompt}。${suffixParts.join("。")}`;
-        log(`使用AI细化提示词（${sh.promptCn.length}字符）+ 风格：${styleObj?.label || "默认"} + 构图：${compositionDesc || "默认"} + 固定后缀`);
+        videoPrompt = `${qualityPrefix}${QUALITY_HARD_RULES}。${videoPrompt}。${suffixParts.join("。")}`;
+        log(`使用AI细化提示词（${sh.promptCn.length}字符）+ 画质前缀：${selectedStyle} + 风格：${styleObj?.label || "默认"} + 构图：${compositionDesc || "默认"}`);
       } else {
-        videoPrompt = `${sceneType}镜头，${cameraMove}运镜，时长${shotDuration}秒。${eventFullDesc}。${styleDesc ? styleDesc + "。" : ""}${compositionDesc ? compositionDesc + "。" : ""}${PROMPT_FIXED_SUFFIX}`;
-        log(`使用默认模板提示词 + 风格：${styleObj?.label || "默认"} + 构图：${compositionDesc || "默认"}（建议先点击AI细化提示词）`);
+        videoPrompt = `${qualityPrefix}${QUALITY_HARD_RULES}。${sceneType}镜头，${cameraMove}运镜，时长${shotDuration}秒。${eventFullDesc}。${styleDesc ? styleDesc + "。" : ""}${compositionDesc ? compositionDesc + "。" : ""}`;
+        log(`使用默认模板提示词 + 画质前缀：${selectedStyle} + 风格：${styleObj?.label || "默认"} + 构图：${compositionDesc || "默认"}（建议先点击AI细化提示词）`);
       }
 
       // 场景一致性：并入分镜绑定场景的设定（场景名+场景提示词）
@@ -1408,15 +1468,15 @@ ${shotTexts}`;
     else if (resolution.includes("横")) compositionDesc = "横屏16:9构图";
     else if (resolution.includes("1:1") || resolution.includes("方")) compositionDesc = "方形1:1构图";
     const eventFullDesc = (sh.title || "") + (sh.sceneDesc ? "。" + sh.sceneDesc : "");
+    const qualityPrefix = getQualityPrefix(selectedStyle);
     let videoPrompt;
     if (sh.promptCn && sh.promptCn.length > 50) {
       const suffixParts = [];
       if (styleDesc) suffixParts.push(styleDesc);
       if (compositionDesc) suffixParts.push(compositionDesc);
-      suffixParts.push(PROMPT_FIXED_SUFFIX);
-      videoPrompt = `${sh.promptCn}。${suffixParts.join("。")}`;
+      videoPrompt = `${qualityPrefix}${QUALITY_HARD_RULES}。${sh.promptCn}。${suffixParts.join("。")}`;
     } else {
-      videoPrompt = `${sceneType}镜头，${cameraMove}运镜，时长${shotDuration}秒。${eventFullDesc}。${styleDesc ? styleDesc + "。" : ""}${compositionDesc ? compositionDesc + "。" : ""}${PROMPT_FIXED_SUFFIX}`;
+      videoPrompt = `${qualityPrefix}${QUALITY_HARD_RULES}。${sceneType}镜头，${cameraMove}运镜，时长${shotDuration}秒。${eventFullDesc}。${styleDesc ? styleDesc + "。" : ""}${compositionDesc ? compositionDesc + "。" : ""}`;
     }
     const boundScene = scenes.find(sc => sc.id === sh.selectedSceneId);
     if (boundScene) {
