@@ -567,7 +567,30 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       const shotDuration = duration;
       const desc = sh.sceneDesc || "";
       const dialogue = sh.dialogue || "";
-      const characters = (sh.characters || []).join("、");
+      const charList = sh.characters || [];
+      const nChar = charList.length;
+      const characters = charList.join("、") || "无（空镜）";
+      // 按分镜实际角色数动态生成 H3 Subject 分配说明（0人=空镜 / 1人 / N人）
+      let subjectAssign, subjectUse, extraRule, shotBodyRule, appearanceRule;
+      if (nChar === 0) {
+        subjectAssign = "<Subject 1> 是场景环境（来自 <Picture 1>），本镜头为纯场景空镜，画面中不得出现任何人物";
+        subjectUse = "场景环境全程用 <Subject 1>";
+        extraRule = "【本镜头为纯场景空镜：画面中严禁出现任何人物、人影、背影、路人或人群，只允许场景与道具存在】";
+        shotBodyRule = "场景主体元素的位置与变化（本镜无人物）";
+        appearanceRule = "（空镜无角色，无需外貌描述）";
+      } else {
+        const subjNames = charList
+          .map((c, i) => `<Subject ${i + 1}> 是出场角色${i + 1}（${c}，外观与身份来自 <Picture ${i + 1}>）`)
+          .join("，");
+        subjectAssign = `${subjNames}，<Subject ${nChar + 1}> 是场景环境（来自 <Picture ${nChar + 1}>）`;
+        const uses = charList.map((_, i) => `<Subject ${i + 1}>`).join("、");
+        subjectUse = `出场角色全程用 ${uses}，场景用 <Subject ${nChar + 1}>`;
+        extraRule = "【禁止出现分镜绑定角色之外的任何其他人物、人群、路人、观众或额外角色】；多角色互动时按出场顺序写清各自的位置、动作、视线关系";
+        shotBodyRule = nChar === 1
+          ? "<Subject 1> 在画面中的位置与主要动作"
+          : `各出场角色在画面中的位置与主要动作（按 ${uses} 顺序逐人写清）`;
+        appearanceRule = `各角色外貌细节（五官/发型/服装/配饰）在 [Shot 1] 首次出现时各描述一次，与对应参考图保持一致，后续镜头不再重复`;
+      }
       // 当前选中的镜头分类模板（auto=让LLM自动判断类型）
       const refineTpl = REFINE_TEMPLATES.find(t => t.key === refineType) || REFINE_TEMPLATES[0];
       const recommendedCam = recommendCamera(desc, sh.title || "", dialogue);
@@ -584,14 +607,14 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
 【summary 要求】一个简短英文段落（60-120 词）：
 1. 以 "[reference generation] " 开头（固定任务类型前缀）
 2. 说明目标视频内容、时长、核心动作
-3. 明确素材任务分配：<Subject 1> 是出场角色（外观与身份来自 <Picture 1>），<Subject 2> 是场景环境（来自 <Picture 2>）
+3. 明确素材任务分配：${subjectAssign}
 
 【detailed_description 要求】英文，300-500 词，严格按播放时间分镜头（本分镜 ${shotDuration} 秒，三段）：
 - [Shot 1] 开头不写时间戳；[Shot 2] At 00:03.000；[Shot 3] At 00:07.000（或按总时长比例分配）
 - 开头先用 1-2 句英文交代整体风格与光影基调（从下方光影库选择）
-- 每个镜头依次写：①景别与构图 ②<Subject 1> 在画面中的位置与主要动作 ③可见的状态变化（表情/姿势/光影/物体位置）④运镜（从运镜库选择，写清距离/速度/幅度/方向，不运镜就写静态机位）⑤本段光影方案（光源类型+色温+方向+明暗对比）⑥声音或台词（台词用 <d>[Chinese] 完整台词。</d>，与口型同步）
-- 出场角色全程用 <Subject 1>，场景用 <Subject 2>；【禁止出现任何其他人物、人群、路人、观众或额外角色】；若分镜涉及多人场景，一律改写为只有 <Subject 1> 一人在场
-- 角色外貌细节（五官/发型/服装/配饰）在 [Shot 1] 首次出现时描述一次，与参考图保持一致，后续镜头不再重复
+- 每个镜头依次写：①景别与构图 ②${shotBodyRule} ③可见的状态变化（表情/姿势/光影/物体位置）④运镜（从运镜库选择，写清距离/速度/幅度/方向，不运镜就写静态机位）⑤本段光影方案（光源类型+色温+方向+明暗对比）⑥声音或台词（台词用 <d>[Chinese] 完整台词。</d>，与口型同步）
+- ${subjectUse}；${extraRule}
+- ${appearanceRule}
 
 【专业运镜库】（必须从中选择，禁止自创）
 ${cameraLibText}
@@ -1586,8 +1609,14 @@ ${shotTexts}`;
           if (url) sceneRefs.push(url);
         }
         const shotItem = { prompt, duration: Math.min(10, Math.max(3, sh.duration || duration || 5)) };
-        if (subjectRefs[0]) shotItem.ref_image_0 = subjectRefs[0];
-        if (sceneRefs[0]) shotItem.ref_image_1 = sceneRefs[0];
+        // 参考图契约：人物在前（ref_image_0..N-1）+ 场景在后（ref_image_N..），对齐调度机 _collect_refs 按 subject_names 切分
+        subjectRefs.forEach((u, i) => { shotItem[`ref_image_${i}`] = u; });
+        sceneRefs.forEach((u, i) => { shotItem[`ref_image_${subjectRefs.length + i}`] = u; });
+        // 多角色锁脸：subject_names 传全部分镜绑定角色名（调度机据此切分人物/场景并生成锁脸定义）
+        const shotCharNames = (sh.characters || [])
+          .filter(c => charImages.includes(c.image))
+          .map(c => c.name || "").filter(Boolean);
+        if (shotCharNames.length > 0) shotItem.subject_names = shotCharNames;
         shots.push(shotItem);
         log(`  分镜${i + 1}：人物${subjectRefs.length}张 场景${sceneRefs.length}张 时长${shotItem.duration}秒`);
       }

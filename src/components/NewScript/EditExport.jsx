@@ -1052,31 +1052,20 @@ export function EditExport({ project, update, log, incomingAssets = [], onConsum
   };
 
   // 导出
-  // 旧实现调 merge_videos，但其 Rust 签名是 (inputs, burn_subtitles, labels)，
-  // 与这里传的 (shots, width, height, fps...) 完全不匹配，必定报错；
-  // 而且音频轨 / 文本轨从未传给后端，拿到结果也不落盘。改为调 export_timeline。
-  const urlToBase64 = async (url) => {
-    const r = await fetch(url);
-    const b = await r.blob();
-    return await new Promise((resolve, reject) => {
-      const fr = new FileReader();
-      fr.onload = () => resolve(String(fr.result).split(",")[1] || "");
-      fr.onerror = () => reject(new Error("素材读取失败"));
-      fr.readAsDataURL(b);
-    });
-  };
-
+  // 素材不再在前端 fetch+base64（大视频会 Failed to fetch / 内存爆炸），
+  // 改为直接把 URL 交给 Rust export_timeline，由 Rust 侧流式下载后再合成。
   const exportVideo = async () => {
     if (timelineClips.length === 0) { log?.("时间线上没有视频片段，无法导出"); return; }
     setBusy("video");
     try {
       const ratio = ASPECT_RATIOS.find(r => r.id === aspectRatio);
-      log?.("正在读取素材…");
+      log?.("正在准备素材…");
 
       const clips = [];
       for (const c of [...timelineClips].sort((a, b) => a.start - b.start)) {
         clips.push({
-          data: await urlToBase64(c.url),
+          url: c.url || "",
+          data: "",
           start: c.start || 0,
           duration: c.duration || 0,
           speed: c.speed || 1,
@@ -1091,7 +1080,8 @@ export function EditExport({ project, update, log, incomingAssets = [], onConsum
       const audios = [];
       for (const a of [...audioClips].sort((x, y) => x.start - y.start)) {
         audios.push({
-          data: await urlToBase64(a.url),
+          url: a.url || "",
+          data: "",
           start: a.start || 0,
           duration: a.duration || 0,
           speed: a.speed || 1,

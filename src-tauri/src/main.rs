@@ -20,6 +20,53 @@ fn save_file(dir: String, filename: String, data: String) -> Result<String, Stri
     Ok(path.to_string_lossy().to_string())
 }
 
+/// 仅取安全文件名（防路径遍历），空则用默认名。
+fn safe_filename(name: &str, fallback: &str) -> String {
+    let n = std::path::Path::new(name)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .filter(|s| !s.trim().is_empty() && s != "." && s != "..")
+        .unwrap_or_else(|| fallback.to_string());
+    n
+}
+
+/// 下载远程资源到本地目录（目录名 | 文件名都做安全处理）。URL 下载不经前端 IPC，
+/// 无 CORS、无超大 base64 内存问题；失败时返回可读原因。
+async fn fetch_to(url: &str, dir: &std::path::Path, filename: &str) -> Result<std::path::PathBuf, String> {
+    let _ = std::fs::create_dir_all(dir);
+    let path = dir.join(filename);
+    let resp = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("HTTP 客户端初始化失败: {e}"))?
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("下载失败（{url}）: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("下载失败（{url}）: HTTP {}", resp.status()));
+    }
+    let mut out = std::fs::File::create(&path).map_err(|e| format!("创建文件失败: {e}"))?;
+    let mut stream = resp.bytes_stream();
+    use futures_util::StreamExt;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("下载中断: {e}"))?;
+        use std::io::Write;
+        out.write_all(&chunk).map_err(|e| format!("写入失败: {e}"))?;
+    }
+    Ok(path)
+}
+
+/// 桌面端下载：Rust 侧直接拉取 URL 到系统「下载」目录（不经前端 base64/IPC）。
+#[tauri::command]
+async fn download_url(url: String, filename: String) -> Result<String, String> {
+    let home = std::env::var("USERPROFILE").unwrap_or_default();
+    let dir = std::path::PathBuf::from(&home).join("Downloads");
+    let name = safe_filename(&filename, "download");
+    let path = fetch_to(&url, &dir, &name).await?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 /// 桌面端：把短剧素材库生成的角色/场景 3D 模型元数据写入共享目录，
 /// 供 3D 导演台（独立 exe）启动后自动载入。文件位于 D:/JINSU/jinsu-shared-assets.json。
 #[tauri::command]
@@ -516,6 +563,7 @@ fn def_hundred() -> f64 { 100.0 }
 #[derive(Clone, serde::Deserialize)]
 struct TlVideoClip {
     #[serde(default)] data: String,
+    #[serde(default)] url: String,
     #[serde(default)] start: f64,
     #[serde(default)] duration: f64,
     #[serde(default = "def_speed")] speed: f64,
@@ -529,6 +577,7 @@ struct TlVideoClip {
 #[derive(Clone, serde::Deserialize)]
 struct TlAudioClip {
     #[serde(default)] data: String,
+    #[serde(default)] url: String,
     #[serde(default)] start: f64,
     #[serde(default)] duration: f64,
     #[serde(default = "def_speed")] speed: f64,
@@ -787,15 +836,30 @@ fn export_timeline(
     let bg = format!("0x{}", bg_color.trim_start_matches('#'));
     let br = if bitrate.trim().is_empty() { "8M".to_string() } else { bitrate };
 
+    // 素材获取：优先用前端传来的 base64；为空且有 url 时由 Rust 直接下载
+    // （避免超大视频经 IPC/base64 传输导致内存爆炸或 Failed to fetch）。
+    let rt = tauri::async_runtime::Handle::current();
     for (i, c) in clips.iter().enumerate() {
-        let bytes = decode_b64(&c.data, i)?;
-        std::fs::write(tmp.join(format!("et_v{}.mp4", i)), &bytes)
-            .map_err(|e| format!("写视频片段 {} 失败: {}", i, e))?;
+        if c.data.is_empty() && !c.url.is_empty() {
+            let name = format!("et_v{}.mp4", i);
+            rt.block_on(fetch_to(&c.url, &tmp, &name))
+                .map_err(|e| format!("视频素材 {} 下载失败: {}", i, e))?;
+        } else {
+            let bytes = decode_b64(&c.data, i)?;
+            std::fs::write(tmp.join(format!("et_v{}.mp4", i)), &bytes)
+                .map_err(|e| format!("写视频片段 {} 失败: {}", i, e))?;
+        }
     }
     for (j, a) in audios.iter().enumerate() {
-        let bytes = decode_b64(&a.data, j)?;
-        std::fs::write(tmp.join(format!("et_a{}.mp3", j)), &bytes)
-            .map_err(|e| format!("写音频片段 {} 失败: {}", j, e))?;
+        if a.data.is_empty() && !a.url.is_empty() {
+            let name = format!("et_a{}.mp3", j);
+            rt.block_on(fetch_to(&a.url, &tmp, &name))
+                .map_err(|e| format!("音频素材 {} 下载失败: {}", j, e))?;
+        } else {
+            let bytes = decode_b64(&a.data, j)?;
+            std::fs::write(tmp.join(format!("et_a{}.mp3", j)), &bytes)
+                .map_err(|e| format!("写音频片段 {} 失败: {}", j, e))?;
+        }
     }
 
     // 文本轨 → ASS（带字体/颜色/背景框/位置样式）
@@ -861,6 +925,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             save_file,
+            download_url,
             save_shared_assets,
             export_intro_mp4,
             merge_videos,

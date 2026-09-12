@@ -317,8 +317,29 @@ export async function saveBlob(filename, blob) {
 
 // 下载远程资源（成片导出）
 export async function downloadUrl(url, filename) {
+  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (isTauri) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const path = await invoke("download_url", { url, filename });
+      console.log("已下载到:", path);
+      return true;
+    } catch (e) {
+      // Rust 下载失败（URL 不可达 / 实例未开等），明确报错而不是静默打开空白页
+      const msg = (e && (e.message || e)) || "下载失败";
+      console.warn("Tauri download_url 失败:", msg);
+      if (typeof window !== "undefined" && window.alert) {
+        window.alert(`下载失败：${msg}\n请确认视频/图片地址可访问（实例或服务是否已关闭）`);
+      }
+      return false;
+    }
+  }
   try {
     const r = await fetch(url);
+    if (!r.ok) {
+      if (window.alert) window.alert(`下载失败：HTTP ${r.status}，请确认资源地址可访问`);
+      return false;
+    }
     const b = await r.blob();
     const res = await saveBlob(filename, b);
     return !!res.ok;
