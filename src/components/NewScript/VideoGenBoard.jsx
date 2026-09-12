@@ -9,8 +9,8 @@ import { extractAppearance } from "./CharacterManager.jsx";
 const VIDEO_MODES = [
   { key: "i2v", label: "图生视频 (I2V)", desc: "角色参考图驱动，人物外貌一致，模型自由发挥画面" },
   { key: "s2v", label: "人物+场景参考", desc: "人物+场景参考图驱动，不依赖首帧，人物外貌与场景一致" },
-  { key: "r2v", label: "首尾帧 (R2V/lightx2v)", desc: "首帧+尾帧精确控制画面起止，minimax_h3_lightx2v工作流" },
-  { key: "ia2v", label: "全能参考 (Ref2VA/v2)", desc: "参考图片+参考音频+文本，最多9图3音，minimax_h3_image_audio_to_video_v2工作流" },
+  { key: "r2v", label: "首尾帧 (R2V)", desc: "首帧+尾帧精确控制画面起止，轻量图生视频工作流" },
+  { key: "ia2v", label: "全能参考 (Ref2VA)", desc: "参考图片+参考音频+文本，最多9图3音，多模态参考工作流" },
   { key: "t2v", label: "文生视频 (T2V)", desc: "纯文字描述生成，自由度最高" },
 ];
 
@@ -668,26 +668,14 @@ ${refineTpl.guide}
 
   // 获取分镜涉及的角色图片（优先使用用户手动选择的角色）
   const getShotCharacterImages = (sh) => {
-    // 如果用户手动选择了角色，优先使用
+    // 仅使用用户手动选择的角色图；未选择则返回空（空镜/无人物分镜不传人物参考图，不自动绑定）
     if (sh.selectedCharIds && sh.selectedCharIds.length > 0) {
       const selectedChars = characters.filter(c => c.image && sh.selectedCharIds.includes(c.id));
       if (selectedChars.length > 0) {
         return selectedChars.map(c => c.image).filter(Boolean);
       }
     }
-    // 否则按名字自动匹配
-    const shotCharNames = (sh.characters || []).map(n => n.trim());
-    let matchedChars = [];
-    if (shotCharNames.length > 0) {
-      matchedChars = characters.filter(c =>
-        c.image && shotCharNames.some(name => c.name?.includes(name) || name.includes(c.name))
-      );
-    }
-    // 如果分镜没标角色，取所有有图的角色（最多3张）
-    if (matchedChars.length === 0) {
-      matchedChars = characters.filter(c => c.image).slice(0, 3);
-    }
-    return matchedChars.map(c => c.image).filter(Boolean);
+    return [];
   };
 
   // 切换角色选择
@@ -1093,26 +1081,24 @@ ${shotTexts}`;
         const subjectNames = characters.filter(c => charImages.includes(c.image)).map(c => c.name || "").filter(Boolean);
         // 角色外观描述（与 ref_image 人物图顺序一一对应）：H3 锁人物需要「文字外观 + <Picture N> 图片引用」双重锚定
         const subjectDescs = characters.filter(c => charImages.includes(c.image)).map(c => extractAppearance(c) || "").filter(Boolean);
-        if (charImages.length === 0) {
-          log("⚠️ 没有可用的角色参考图，请先在「人物管理」生成角色三视图");
-          clearBusy(sh.id);
-          return;
-        }
-
-        // 1. 上传人物参考图（从ref_image_0开始，最多9张）
-        log(`找到${charImages.length}张角色图，开始上传…`);
         let refIdx = 0;
-        for (let i = 0; i < charImages.length; i++) {
-          if (refIdx >= 9) break; // lightx2v_v5支持ref_image_0到ref_image_8共9张
-          const img = charImages[i];
-          log(`正在上传第${i + 1}张角色图…`);
-          const charPublicUrl = await uploadImageToServer(img, log);
-          if (charPublicUrl) {
-            workflowParams[`ref_image_${refIdx}`] = charPublicUrl;
-            log(`第${i + 1}张角色图上传成功，ref_image_${refIdx} = ${charPublicUrl.substring(0, 80)}...`);
-            refIdx++;
-          } else {
-            log(`❌ 第${i + 1}张角色图上传失败`);
+        if (charImages.length === 0) {
+          log("ℹ️ 本分镜未绑定人物图，按无人物参考生成（仅场景参考图 + 提示词）");
+        } else {
+          // 1. 上传人物参考图（从ref_image_0开始，最多9张）
+          log(`找到${charImages.length}张角色图，开始上传…`);
+          for (let i = 0; i < charImages.length; i++) {
+            if (refIdx >= 9) break; // lightx2v_v5支持ref_image_0到ref_image_8共9张
+            const img = charImages[i];
+            log(`正在上传第${i + 1}张角色图…`);
+            const charPublicUrl = await uploadImageToServer(img, log);
+            if (charPublicUrl) {
+              workflowParams[`ref_image_${refIdx}`] = charPublicUrl;
+              log(`第${i + 1}张角色图上传成功，ref_image_${refIdx} = ${charPublicUrl.substring(0, 80)}...`);
+              refIdx++;
+            } else {
+              log(`❌ 第${i + 1}张角色图上传失败`);
+            }
           }
         }
         const charCount = refIdx; // 人物参考图数量
@@ -1146,10 +1132,10 @@ ${shotTexts}`;
         if (videoProvider === "wan22" || videoProvider === "kling") {
           if (selectedMode === "s2v") {
             // 人物+场景参考模式：不依赖首帧，直接用人物+场景参考图
-            log(`参考图：人物${charCount}张（ref_image_0-ref_image_${charCount - 1}），人物+场景参考模式，不使用首帧`);
+            log(`参考图：人物${charCount}张${charCount > 0 ? `（ref_image_0-ref_image_${charCount - 1}）` : ""}，人物+场景参考模式，不使用首帧`);
           } else {
             // 首帧+人物图模式：获取首帧（本分镜分镜图 / 上个视频尾帧 / 手动上传）
-            log(`参考图：人物${charCount}张（ref_image_0-ref_image_${charCount - 1}），首帧来源见下方设置`);
+            log(`参考图：人物${charCount}张${charCount > 0 ? `（ref_image_0-ref_image_${charCount - 1}）` : ""}，首帧来源见下方设置`);
             let resolvedFirstFrame = null;
             let firstFrameDesc = "";
             if (firstFrameSource === "shot") {
@@ -1185,7 +1171,7 @@ ${shotTexts}`;
             log(`首帧上传成功 ✓`);
           }
         } else {
-          log(`参考图：人物${charCount}张（ref_image_0-ref_image_${charCount - 1}），不使用首帧`);
+          log(`参考图：人物${charCount}张${charCount > 0 ? `（ref_image_0-ref_image_${charCount - 1}）` : ""}，不使用首帧`);
         }
       } else if (selectedMode === "r2v") {
         // 首尾帧（minimax_h3_lightx2v）：首帧和尾帧都是必填，各有三种来源选择
