@@ -17,7 +17,7 @@ const STYLE_OPTIONS = [
 // 画面比例选项
 const ASPECT_RATIO_OPTIONS = [
   { value: "1:1", label: "1:1 方形", size: "1328x1328" },
-  { value: "16:9", label: "16:9 横屏", size: "1820x1024" },
+  { value: "16:9", label: "16:9 横屏", size: "1672x941" },
   { value: "9:16", label: "9:16 竖屏", size: "1024x1820" },
   { value: "4:3", label: "4:3 标准", size: "1152x864" },
   { value: "3:4", label: "3:4 竖版", size: "864x1152" },
