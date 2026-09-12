@@ -838,11 +838,11 @@ fn export_timeline(
 
     // 素材获取：优先用前端传来的 base64；为空且有 url 时由 Rust 直接下载
     // （避免超大视频经 IPC/base64 传输导致内存爆炸或 Failed to fetch）。
-    let rt = tauri::async_runtime::Handle::current();
     for (i, c) in clips.iter().enumerate() {
         if c.data.is_empty() && !c.url.is_empty() {
             let name = format!("et_v{}.mp4", i);
-            rt.block_on(fetch_to(&c.url, &tmp, &name))
+            fetch_to(&c.url, &tmp, &name)
+                .await
                 .map_err(|e| format!("视频素材 {} 下载失败: {}", i, e))?;
         } else {
             let bytes = decode_b64(&c.data, i)?;
@@ -853,7 +853,8 @@ fn export_timeline(
     for (j, a) in audios.iter().enumerate() {
         if a.data.is_empty() && !a.url.is_empty() {
             let name = format!("et_a{}.mp3", j);
-            rt.block_on(fetch_to(&a.url, &tmp, &name))
+            fetch_to(&a.url, &tmp, &name)
+                .await
                 .map_err(|e| format!("音频素材 {} 下载失败: {}", j, e))?;
         } else {
             let bytes = decode_b64(&a.data, j)?;
