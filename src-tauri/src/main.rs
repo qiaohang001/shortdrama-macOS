@@ -812,7 +812,7 @@ fn run_export(
 
 /// 导出时间线成片：视频轨 + 音频轨 + 文本轨 → 单个 MP4，保存到下载目录并返回完整路径。
 #[tauri::command]
-fn export_timeline(
+async fn export_timeline(
     app: tauri::AppHandle,
     clips: Vec<TlVideoClip>,
     audios: Vec<TlAudioClip>,
