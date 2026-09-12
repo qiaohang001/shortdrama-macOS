@@ -351,11 +351,11 @@ ${content.slice(0, 5000)}
     log(`正在为「${char.name}」生成人物参考图...`);
     try {
       const styleObj = STYLE_OPTIONS.find(s => s.value === selectedStyle) || STYLE_OPTIONS[0];
-      // 锁定图 = 单张正面全身（复用细化提示词的外貌描述 + 正面全身布局），视频生成时用这张做人物锁定
-      const basePrompt = buildCharacterLockPrompt(char);
+      // 锁定图 = 三视图+面部特写四格拼图（上排正面/侧面/背面全身 + 下排面部特写，横版 1672×941），视频生成时用这张做人物锁定，更利于 H3 识别角色
+      const basePrompt = buildCharacterSheetPrompt(char);
       // 生成时注入所选风格描述
       const prompt = injectStyleDesc(basePrompt, styleObj.desc);
-      const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1328x1328", n: 1 });
+      const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1672x941", n: 1 });
       const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
       if (!imageUrl) throw new Error("未返回图片地址");
       // 使用函数式更新，确保使用最新的状态，并使用ID匹配人物
@@ -434,10 +434,10 @@ ${content.slice(0, 5000)}
     log(`正在为「${char.name}」生成三视图展示图...`);
     try {
       const styleObj = STYLE_OPTIONS.find(s => s.value === selectedStyle) || STYLE_OPTIONS[0];
-      // 三视图展示图 = 四宫格布局（正/侧/背全身 + 面部特写），供人物卡/素材展示
+      // 三视图展示图 = 四宫格布局（正/侧/背全身 + 面部特写），供人物卡/素材展示；与锁定图同为横版 1672×941
       const basePrompt = buildCharacterSheetPrompt(char);
       const prompt = injectStyleDesc(basePrompt, styleObj.desc);
-      const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1328x1328", n: 1 });
+      const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1672x941", n: 1 });
       const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
       if (!imageUrl) throw new Error("未返回图片地址");
       update(prev => {

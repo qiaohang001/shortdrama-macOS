@@ -4,6 +4,7 @@ import { runDispatchJob, api, generateImage, extractTail, concatVideos } from ".
 import { isLoggedIn, precheckCredits, getCreditBalance } from "../../utils/backend-api.js";
 import { getAppSetting, saveAppSetting } from "../../utils/app-settings.js";
 import { calcVideoPrice, getPrice } from "../../utils/pricing-utils.js";
+import { extractAppearance } from "./CharacterManager.jsx";
 
 const VIDEO_MODES = [
   { key: "i2v", label: "图生视频 (I2V)", desc: "角色参考图驱动，人物外貌一致，模型自由发挥画面" },
@@ -572,48 +573,48 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       const recommendedCam = recommendCamera(desc, sh.title || "", dialogue);
       const cameraLibText = Object.entries(CAMERA_MOVES).map(([k, v]) => `${v.name}：${v.desc}`).join("\n");
       
-      const prompt = `你是一名专业的AI视频生成提示词工程师，精通MiniMax H3视频生成模型。
-请将以下简单的分镜描述，细化成一段按时间分段的、专业详细的中文视频提示词。
+      const recommendedLight = recommendLighting(desc, sh.title || "", dialogue);
+      const prompt = `你是一名专业的AI视频生成提示词工程师，精通MiniMax H3视频生成模型官方提示词规范（Full-Reference / Ref2VA 六段结构）。
 
-输出格式（必须严格按此格式，不要添加其他内容）：
-【开场】0-3秒：镜头语言+画面描述+细节（如"微距特写，泛黄的千年古卷静静铺在案上，烛火跳动间，卷上墨字开始流动"）
-【发展】3-7秒：镜头语言+画面描述+细节（如"镜头螺旋上升环绕，墨迹向中心汇聚，凝聚成一位身着月白长裙的墨魂美人"）
-【高潮/收尾】7-${shotDuration}秒：镜头语言+画面描述+细节（如"慢动作特写，古卷文字飞起化作她的青丝，金色标点符号点缀发间，她缓缓抬眼看向镜头"）
+请将以下简单的分镜描述，细化成符合 H3 官方规范的英文结构化提示词（summary + detailed_description 两个字段）。
 
-细化要求：
-1. 每段必须包含：镜头语言（景别+运镜）+ 画面主体 + 动作/变化 + 光影/色彩/细节
-2. 运镜必须从下方运镜库中选择，使用精确参数描述，不要自创
-3. 画面要具体细腻，可合理扩充细节（环境元素、光影变化、动作细节等）；出场角色的外貌细节（五官、发型、发色、服装款式与颜色、体型、配饰）可根据分镜需要补充描述，并与参考图保持一致
-4. 时间分段要流畅衔接，前一段的结尾是后一段的起点
-5. 整体长度控制在250-400个中文字
+【输出要求】只输出一个合法 JSON 对象，不要 markdown 代码块、不要解释、不要其他文字，格式严格如下：
+{"summary": "...", "detailed_description": "..."}
 
-【专业运镜库】（必须从中选择）
+【summary 要求】一个简短英文段落（60-120 词）：
+1. 以 "[reference generation] " 开头（固定任务类型前缀）
+2. 说明目标视频内容、时长、核心动作
+3. 明确素材任务分配：<Subject 1> 是出场角色（外观与身份来自 <Picture 1>），<Subject 2> 是场景环境（来自 <Picture 2>）
+
+【detailed_description 要求】英文，300-500 词，严格按播放时间分镜头（本分镜 ${shotDuration} 秒，三段）：
+- [Shot 1] 开头不写时间戳；[Shot 2] At 00:03.000；[Shot 3] At 00:07.000（或按总时长比例分配）
+- 开头先用 1-2 句英文交代整体风格与光影基调（从下方光影库选择）
+- 每个镜头依次写：①景别与构图 ②<Subject 1> 在画面中的位置与主要动作 ③可见的状态变化（表情/姿势/光影/物体位置）④运镜（从运镜库选择，写清距离/速度/幅度/方向，不运镜就写静态机位）⑤本段光影方案（光源类型+色温+方向+明暗对比）⑥声音或台词（台词用 <d>[Chinese] 完整台词。</d>，与口型同步）
+- 出场角色全程用 <Subject 1>，场景用 <Subject 2>；【禁止出现任何其他人物、人群、路人、观众或额外角色】；若分镜涉及多人场景，一律改写为只有 <Subject 1> 一人在场
+- 角色外貌细节（五官/发型/服装/配饰）在 [Shot 1] 首次出现时描述一次，与参考图保持一致，后续镜头不再重复
+
+【专业运镜库】（必须从中选择，禁止自创）
 ${cameraLibText}
 
 【运镜选择规则】
 1. 根据分镜的情绪和动作选择最匹配的运镜
 2. 推荐运镜：${recommendedCam.name}（${recommendedCam.reason}），如无更合适的选择请使用此推荐
 3. 运镜描述要具体到：镜头距离、运动速度、晃动幅度、主体位置关系
-4. 不要使用"平稳跟随跟镜"这种模糊描述
+4. 不要使用"平稳跟随跟镜"这类模糊描述
 
 【专业光影库】（必须从中选择一套作为本分镜的光影方案）
 ${LIGHTING_LIBRARY.map(v => `${v.name}：${v.desc}`).join("\n")}
 
 【光影选择规则】
-1. 推荐光影：${recommendLighting(desc, sh.title || "", dialogue).name}（${recommendLighting(desc, sh.title || "", dialogue).desc}），如情绪匹配度更高可另选库内其他方案
-2. 每段时间分段都必须写明本段采用的光影方案（光源类型+色温+方向+明暗对比），不要只写"灯光柔和"这类模糊描述
+1. 推荐光影：${recommendedLight.name}（${recommendedLight.desc}），如情绪匹配度更高可另选库内其他方案
+2. 每个镜头都必须写明本段采用的光影方案，不要只写"灯光柔和"这类模糊描述
 3. 光影要与镜头情绪一致，可随剧情节奏在同一分镜内做光影微调（如从暗到亮）
 
-【全局画质硬性约束】（必须贯穿全部分镜描述）
+【全局画质硬性约束】（融入 detailed_description 的风格开场句）
 无AI失真脸部，皮肤保留原生毛孔肌理，拒绝过度磨皮、重度美白；人物四肢手部动作自然无畸形，五官脸型全程统一，服装发型配饰前后镜头无改动；画面流畅无抖动、无闪烁卡顿、无崩坏肢体，阴影过渡柔和，无塑料假人质感；人物口型与台词1:1精准同步。
 
 【镜头类型】本分镜按「${refineTpl.label}」细化：
 ${refineTpl.guide}
-
-要求：
-1. 输出纯中文，不要英文，不要解释，不要markdown代码块
-2. 严格按照【开场】【发展】【高潮/收尾】三段格式输出
-3. 每段内容要具体细腻，贴合分镜描述
 
 分镜信息：
 - 分镜标题：${sh.title}
@@ -624,7 +625,7 @@ ${refineTpl.guide}
 - 对话内容：${dialogue}
 - 出场角色：${characters}
 
-直接输出细化后的中文提示词：`;
+直接输出 JSON：`;
       
       const res = await api("/api/llm/chat", {
         method: "POST",
@@ -635,10 +636,20 @@ ${refineTpl.guide}
       });
       const refinedText = (res.text || "").trim();
       if (!refinedText) throw new Error("LLM未返回内容");
-      
-      // 保存细化后的提示词到promptCn字段（虽然是英文，但字段名沿用）
-      update({ shots: shots.map(s => s.id === sh.id ? { ...s, promptCn: refinedText } : s) });
-      log(`✅「${sh.title}」提示词细化成功（${refinedText.length}字符）`);
+
+      // 解析 H3 结构化 JSON（兼容 markdown 代码块包裹）；失败则降级保存原文
+      let savedPromptCn = refinedText;
+      try {
+        const cleaned = refinedText.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+        const parsed = JSON.parse(cleaned);
+        if (parsed && parsed.detailed_description) {
+          savedPromptCn = JSON.stringify({ summary: parsed.summary || "", detailed_description: parsed.detailed_description });
+        }
+      } catch (e) { /* 非 JSON，保留原文 */ }
+
+      // 保存细化后的提示词到promptCn字段（H3模式为 summary+detailed_description 的JSON字符串）
+      update({ shots: shots.map(s => s.id === sh.id ? { ...s, promptCn: savedPromptCn } : s) });
+      log(`✅「${sh.title}」提示词细化成功（${savedPromptCn.length}字符）`);
 
       // 积分扣减已移至后端（/api/llm/chat 按 llm_type 扣费），前端仅刷新余额显示
       if (isLoggedIn()) {
@@ -854,8 +865,8 @@ ${shotTexts}`;
     log(`正在生成场景「${scene.name}」图片...`);
     try {
       const prompt = scene.prompt || scene.desc || scene.name;
-      // 场景图比例跟随用户选择的画幅（竖9:16 / 方1:1 / 横16:9）
-      const sceneSize = resolution.includes("竖") ? "928x1664" : (resolution.includes("方") || resolution.includes("1:1")) ? "1328x1328" : "1664x928";
+      // 场景图比例：横屏固定 1672×941（16:9 横版场景参考图）；竖屏/方形保持原尺寸
+      const sceneSize = resolution.includes("竖") ? "928x1664" : (resolution.includes("方") || resolution.includes("1:1")) ? "1328x1328" : "1672x941";
       const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: sceneSize, n: 1 });
       const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
       if (!imageUrl) throw new Error("未返回图片地址");
@@ -1018,11 +1029,34 @@ ${shotTexts}`;
       const eventDesc = sh.sceneDesc || "";
       const eventFullDesc = eventTitle ? `${eventTitle}。${eventDesc}` : eventDesc;
 
-      // 视频提示词：如果有AI细化后的提示词，直接使用；否则用中文模板构建
+      // 视频提示词：优先 H3 结构化细化（summary+detailed_description），其次 AI 细化中文提示词，最后默认模板
       // 画质前置词（按风格选择）统一放最前，硬性约束全风格生效
       const qualityPrefix = getQualityPrefix(selectedStyle);
+      // 尝试解析 promptCn 为 H3 结构化 JSON（细化输出格式）
+      let h3Refined = null;
+      if (sh.promptCn) {
+        try {
+          const candidate = sh.promptCn.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+          const parsed = JSON.parse(candidate);
+          if (parsed && parsed.detailed_description) h3Refined = parsed;
+        } catch (e) { /* 非 JSON，走旧逻辑 */ }
+      }
       let videoPrompt;
-      if (sh.promptCn && sh.promptCn.length > 50) {
+      let h3Payload = null;
+      if (h3Refined) {
+        // H3 结构化模式：画质/风格/构图/场景设定并入 summary（detailed_description 保持镜头化原文，不破坏 H3 结构）
+        const styleInject = [styleDesc, compositionDesc].filter(Boolean).join("。");
+        const sceneText = boundScene ? [boundScene.name, boundScene.prompt || boundScene.desc].filter(Boolean).join("。") : "";
+        const summaryParts = [h3Refined.summary || "", `${qualityPrefix}${QUALITY_HARD_RULES}`.trim()];
+        if (styleInject) summaryParts.push(styleInject);
+        if (sceneText) summaryParts.push(`场景设定：${sceneText}`);
+        h3Payload = {
+          summary: summaryParts.filter(Boolean).join("。"),
+          detailed_description: h3Refined.detailed_description,
+        };
+        videoPrompt = `${qualityPrefix}${QUALITY_HARD_RULES}。${h3Refined.detailed_description}。${styleInject}${sceneText ? "。场景设定：" + sceneText : ""}`;
+        log(`使用 H3 规范化提示词（summary ${h3Payload.summary.length}字符 + detailed_description ${h3Refined.detailed_description.length}字符）+ 风格：${styleObj?.label || "默认"}`);
+      } else if (sh.promptCn && sh.promptCn.length > 50) {
         videoPrompt = sh.promptCn;
         // 在AI细化提示词前后追加：画质前置词（前缀）+ 风格描述、构图描述
         const suffixParts = [];
@@ -1035,8 +1069,8 @@ ${shotTexts}`;
         log(`使用默认模板提示词 + 画质前缀：${selectedStyle} + 风格：${styleObj?.label || "默认"} + 构图：${compositionDesc || "默认"}（建议先点击AI细化提示词）`);
       }
 
-      // 场景一致性：并入分镜绑定场景的设定（场景名+场景提示词）
-      if (boundScene) {
+      // 场景一致性：非 H3 结构化模式时并入分镜绑定场景的设定（H3 模式已并入 summary）
+      if (boundScene && !h3Payload) {
         const sceneText = [boundScene.name, boundScene.prompt || boundScene.desc].filter(Boolean).join("。");
         videoPrompt += `。场景设定：${sceneText}`;
         log(`已并入场景「${boundScene.name}」设定，保证场景一致性`);
@@ -1047,6 +1081,7 @@ ${shotTexts}`;
         prompt: videoPrompt,
         duration: Math.min(10, shotDuration),
         resolution: resolution,
+        ...(h3Payload ? { h3_prompt: h3Payload } : {}),
       };
 
       let refIdx = 0;
@@ -1055,6 +1090,9 @@ ${shotTexts}`;
       if (selectedMode === "i2v" || selectedMode === "s2v") {
         // 图生视频（minimax_h3_lightx2v_v5 / wan22/kling 人物参考）：使用人物+场景参考图；s2v=人物+场景参考，i2v+prem=首帧+人物+场景
         const charImages = getShotCharacterImages(sh);
+        const subjectNames = characters.filter(c => charImages.includes(c.image)).map(c => c.name || "").filter(Boolean);
+        // 角色外观描述（与 ref_image 人物图顺序一一对应）：H3 锁人物需要「文字外观 + <Picture N> 图片引用」双重锚定
+        const subjectDescs = characters.filter(c => charImages.includes(c.image)).map(c => extractAppearance(c) || "").filter(Boolean);
         if (charImages.length === 0) {
           log("⚠️ 没有可用的角色参考图，请先在「人物管理」生成角色三视图");
           clearBusy(sh.id);
@@ -1096,6 +1134,14 @@ ${shotTexts}`;
         const seed = Math.floor(Math.random() * 2147483647);
         workflowParams.seed = seed;
         log(`随机种子：${seed}`);
+        if (subjectNames.length > 0) {
+          workflowParams.subject_names = subjectNames;
+          log(`角色参考绑定：${subjectNames.join("、")}`);
+        }
+        if (subjectDescs.length > 0) {
+          workflowParams.subject_descs = subjectDescs;
+          log(`角色外观描述绑定：${subjectDescs.length}个角色，首角色描述：${subjectDescs[0].substring(0, 60)}…`);
+        }
 
         if (videoProvider === "wan22" || videoProvider === "kling") {
           if (selectedMode === "s2v") {
@@ -1299,6 +1345,10 @@ ${shotTexts}`;
         const seed = Math.floor(Math.random() * 2147483647);
         workflowParams.seed = seed;
         log(`随机种子：${seed}`);
+        if (subjectNames.length > 0) {
+          workflowParams.subject_names = subjectNames;
+          log(`角色参考绑定：${subjectNames.join("、")}`);
+        }
 
         // 5. duration 已经在 workflowParams 中设置了（1-10秒）
         log(`全能参考（Ref2VA v2）：参考图${refImgIdx}张 + 参考音频${audioIdx}个 + 时长${workflowParams.duration}秒`);
@@ -1469,12 +1519,21 @@ ${shotTexts}`;
     else if (resolution.includes("1:1") || resolution.includes("方")) compositionDesc = "方形1:1构图";
     const eventFullDesc = (sh.title || "") + (sh.sceneDesc ? "。" + sh.sceneDesc : "");
     const qualityPrefix = getQualityPrefix(selectedStyle);
+    // 兼容 H3 结构化细化（JSON）：取 detailed_description 作为可拼接文本
+    let refinedText = sh.promptCn || "";
+    if (refinedText) {
+      try {
+        const candidate = refinedText.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+        const parsed = JSON.parse(candidate);
+        if (parsed && parsed.detailed_description) refinedText = parsed.detailed_description;
+      } catch (e) { /* 非 JSON，保留原文 */ }
+    }
     let videoPrompt;
-    if (sh.promptCn && sh.promptCn.length > 50) {
+    if (refinedText && refinedText.length > 50) {
       const suffixParts = [];
       if (styleDesc) suffixParts.push(styleDesc);
       if (compositionDesc) suffixParts.push(compositionDesc);
-      videoPrompt = `${qualityPrefix}${QUALITY_HARD_RULES}。${sh.promptCn}。${suffixParts.join("。")}`;
+      videoPrompt = `${qualityPrefix}${QUALITY_HARD_RULES}。${refinedText}。${suffixParts.join("。")}`;
     } else {
       videoPrompt = `${qualityPrefix}${QUALITY_HARD_RULES}。${sceneType}镜头，${cameraMove}运镜，时长${shotDuration}秒。${eventFullDesc}。${styleDesc ? styleDesc + "。" : ""}${compositionDesc ? compositionDesc + "。" : ""}`;
     }
@@ -2308,9 +2367,9 @@ ${shotTexts}`;
                   </div>
                   {sh.promptCn && (
                     <div style={{ marginTop: 8, padding: "8px 10px", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: 6 }}>
-                      <div style={{ fontSize: 10, color: "#f59e0b", fontWeight: 600, marginBottom: 4 }}>✨ AI细化提示词（将用于视频生成）</div>
+                      <div style={{ fontSize: 10, color: "#f59e0b", fontWeight: 600, marginBottom: 4 }}>✨ AI细化提示词（H3 规范，将用于视频生成）</div>
                       <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, maxHeight: 80, overflow: "hidden", fontStyle: "italic" }}>
-                        {sh.promptCn}
+                        {(() => { try { const p = JSON.parse(sh.promptCn); return p.detailed_description || sh.promptCn; } catch (e) { return sh.promptCn; } })()}
                       </div>
                     </div>
                   )}
