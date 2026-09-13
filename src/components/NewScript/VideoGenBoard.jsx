@@ -638,10 +638,10 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       // 按分镜实际角色数动态生成 H3 Subject 分配说明（0人=空镜 / 1人 / N人）
       let subjectAssign, subjectUse, extraRule, shotBodyRule, appearanceRule;
       if (nChar === 0) {
-        subjectAssign = "<Subject 1> 是场景环境（来自 <Picture 1>），本镜头未绑定角色参考图，以场景环境为主体；分镜描述中明确出现的特定人物（如倒伏的护卫、尸体、看守、人群等）按画面内容保留呈现";
+        subjectAssign = "<Subject 1> 是场景环境（来自 <Picture 1>），本镜头未绑定角色参考图，以场景环境为主体；分镜描述中明确出现的倒伏护卫/尸体仅以尸身形式作场景元素保留";
         subjectUse = "场景环境全程用 <Subject 1>";
-        extraRule = "【本镜头未绑定角色参考图：禁止出现分镜描述之外的任何人物、路人、人群或额外角色；但分镜描述中明确写到的特定人物（如倒伏的护卫、尸体、看守、侍女等）必须严格按原描述保留在画面中，作为画面内容呈现，不作为角色锁脸、不需要外貌特写】";
-        shotBodyRule = "场景主体元素的位置与变化；分镜描述中明确出现的特定人物（如倒伏护卫、尸体）按其位置与状态呈现";
+        extraRule = "【本镜头未绑定角色参考图：画面中禁止出现任何活人、站立或行走的人物、路人、人群、人影；分镜描述中明确出现的倒伏护卫/尸体，必须严格以尸体形态呈现——面朝下或背对镜头、无面部细节、完全静止无任何动作、绝不起身不移动不抬头，只作为场景元素存在，绝不写成可活动的 guards/person】";
+        shotBodyRule = "场景主体元素的位置与变化；分镜描述中明确出现的倒伏护卫/尸体以完全静止、无面部细节的尸身呈现（只作场景元素，绝无动作）";
         appearanceRule = "（空镜无绑定角色，无需外貌描述）";
       } else {
         const subjNames = charList
@@ -675,6 +675,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
 1. 以 "[reference generation] " 开头（固定任务类型前缀）
 2. 说明目标视频内容、时长、核心动作
 3. 明确素材任务分配：${subjectAssign}
+4. 若分镜提到倒伏护卫/尸体：summary 中必须写成 motionless lifeless bodies / fallen corpses（面朝下或背对镜头、无面部细节、完全静止），并显式声明 no living people, no standing or walking figures in frame；禁止写成 guards/person/character 等可活动的人物词；空镜分镜 summary 不得出现 if any figures appear 之类暗示可出人物的表述
 
 【detailed_description 要求】英文，300-500 词，严格按播放时间分镜头（本分镜 ${shotDuration} 秒，三段）：
 - [Shot 1] 开头不写时间戳；[Shot 2] At 00:03.000；[Shot 3] At 00:07.000（或按总时长比例分配）
@@ -682,6 +683,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
 - 每个镜头依次写：①景别与机位 ②景深 ③构图方式 ④运镜与特效（从镜头语言库选择，写清英文镜语、距离/速度/幅度/方向，明确不运镜的才写 static fixed camera）⑤焦段（从焦段库选择）⑥${shotBodyRule} ⑦可见的状态变化（表情/姿势/光影/物体位置）⑧本段光影方案（光源类型+色温+方向+明暗对比）⑨声音或台词（台词用 <d>[Chinese] 完整台词。</d>，与口型同步）
 - ${subjectUse}；${extraRule}
 - ${appearanceRule}
+- 若分镜含倒伏护卫/尸体：任何景别下尸体均只作背景暗部元素，不聚焦、不展示面部细节，保持完全静止，与地面/积水融为一体
 
 【专业镜头语言库】（五类，从中选择，禁止自创）
 ${shotLibText}
