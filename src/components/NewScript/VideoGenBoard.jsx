@@ -612,12 +612,12 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       alert("请先登录后再使用AI细化提示词功能");
       return;
     }
-    // 积分预校验（AI细化提示词1积分）
+    // 积分预校验（AI细化提示词2积分：U00 Qwen GPU 细化）
     try {
-      const precheck = await precheckCredits(1, "text", "AI细化视频提示词");
+      const precheck = await precheckCredits(2, "text", "AI细化视频提示词");
       if (!precheck.sufficient && precheck.sufficient !== undefined) {
-        log(`❌ 积分不足：需要1积分，当前余额${precheck.balance || 0}积分`);
-        alert(`积分不足！AI细化提示词需要1积分，当前余额${precheck.balance || 0}积分。请充值后再试。`);
+        log(`❌ 积分不足：需要2积分，当前余额${precheck.balance || 0}积分`);
+        alert(`积分不足！AI细化提示词需要2积分，当前余额${precheck.balance || 0}积分。请充值后再试。`);
         return;
       }
     } catch (e) {
@@ -662,93 +662,52 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       
       const recommendedLight = recommendLighting(desc, sh.title || "", dialogue);
       const shotLibText = SHOT_LANGUAGE_TEXT;
-      const shotLibEnText = SHOT_LANGUAGE_EN;
       const fxHighText = SHOT_FX_HIGH;
-      const prompt = `你是一名专业的AI视频生成提示词工程师，精通MiniMax H3视频生成模型官方提示词规范（Full-Reference / Ref2VA 六段结构）。
 
-请将以下简单的分镜描述，细化成符合 H3 官方规范的英文结构化提示词（summary + detailed_description 两个字段）。
+      // ── 方案B：组装本次任务的补充规则（保留项目特有的空镜/尸体/Subject分配/光影/镜头类型/画质约束）──
+      const shotLibRule = shotDuration >= 8
+        ? "本分镜时长≥8秒：至少使用 2 个不同的镜头语言（不同景别或不同运镜），禁止全程固定镜头，除非分镜明确要求监控/客观静止视角"
+        : "本分镜时长较短：至少规划 1 个明确运镜，避免全程固定镜头";
+      const rules = [
+        `【参考主体分配】${subjectAssign}。${subjectUse}。${extraRule}`,
+        `【角色外貌】${appearanceRule}`,
+        `【镜头语言库】${shotLibText}`,
+        `【镜头语言规则】1.每个镜头必须写全五维：景别与机位、景深、构图、运镜与特效、焦段，缺一不可；2.${shotLibRule}；3.运镜描述要具体到镜头距离、运动速度、晃动幅度、主体位置关系，禁止"平稳跟随跟镜"这类模糊描述；4.高风险特效（${fxHighText}）：空镜/无人物分镜可以使用，有人物分镜自动降级为慢速或小幅版本；5.镜头切换遵循背景继承，后一镜的机位/光线/场景元素与前一镜自然衔接，无跳变`,
+        `【光影库】${LIGHTING_LIBRARY.map(v => `${v.name}：${v.desc}`).join("\n")}`,
+        `【推荐光影】${recommendedLight.name}（${recommendedLight.desc}），如情绪匹配度更高可另选库内其他方案；每个镜头必须写明本段光影方案（光源类型+色温+方向+明暗对比），不要写"灯光柔和"这类模糊描述`,
+        `【镜头类型】本分镜按「${refineTpl.label}」细化：${refineTpl.guide}`,
+        `【画质硬约束】${QUALITY_HARD_RULES}`,
+        `【用户指定运镜】${cameraMove}（用户指定了具体运镜时优先使用；未指定则按镜头语言库规划）`,
+      ].join("\n");
 
-【输出要求】只输出一个合法 JSON 对象，不要 markdown 代码块、不要解释、不要其他文字，格式严格如下：
-{"summary": "...", "detailed_description": "..."}
+      const shotInfo = [
+        `分镜标题：${sh.title}`,
+        `场景类型：${sceneType}`,
+        `时长：${shotDuration}秒`,
+        `分镜描述：${desc}`,
+        `对话内容：${dialogue}`,
+        `出场角色：${characters}`,
+      ].join("\n");
 
-【summary 要求】一个简短英文段落（60-120 词）：
-1. 以 "[reference generation] " 开头（固定任务类型前缀）
-2. 说明目标视频内容、时长、核心动作
-3. 明确素材任务分配：${subjectAssign}
-4. 若分镜提到倒伏护卫/尸体：summary 中写成 motionless lifeless corpses（面部清晰可辨、闭眼、无表情、面无血色，完全静止），并显式声明 no living people, no standing or walking figures in frame；禁止写成 guards/person/character 等可活动的人物词，禁止任何动作描述；空镜分镜 summary 不得出现 if any figures appear 之类暗示可出人物的表述
-
-【detailed_description 要求】英文，300-500 词，严格按播放时间分镜头（本分镜 ${shotDuration} 秒，三段）：
-- [Shot 1] 开头不写时间戳；[Shot 2] At 00:03.000；[Shot 3] At 00:07.000（或按总时长比例分配）
-- 开头先用 1-2 句英文交代整体风格与光影基调（从下方光影库选择）
-- 每个镜头依次写：①景别与机位 ②景深 ③构图方式 ④运镜与特效（从镜头语言库选择，写清英文镜语、距离/速度/幅度/方向，明确不运镜的才写 static fixed camera）⑤焦段（从焦段库选择）⑥${shotBodyRule} ⑦可见的状态变化（表情/姿势/光影/物体位置）⑧本段光影方案（光源类型+色温+方向+明暗对比）⑨声音或台词（台词用 <d>[Chinese] 完整台词。</d>，与口型同步）
-- ${subjectUse}；${extraRule}
-- ${appearanceRule}
-- 若分镜含倒伏护卫/尸体：任何景别下尸体均保留清晰面部（闭眼、无表情、面无血色），但完全静止、与地面/积水融为一体，绝无呼吸起伏与任何动作；尸体不因运镜聚焦而出现"活"的表现
-
-【专业镜头语言库】（五类，从中选择，禁止自创）
-${shotLibText}
-
-【镜头语言英文镜语对照】（规划用中文，写进 prompt 用英文）
-${shotLibEnText}
-
-【镜头语言规则（硬性）】
-1. 每个镜头必须写全五维：景别与机位、景深、构图、运镜与特效、焦段，缺一不可
-2. ${shotDuration >= 8 ? "本分镜时长≥8秒：至少使用 2 个不同的镜头语言（不同景别 或 不同运镜，可在两个镜头的边界切换），禁止全程固定镜头，除非分镜明确要求监控/客观静止视角" : "本分镜时长较短：至少规划 1 个明确运镜，避免全程固定镜头"}
-3. 运镜描述要具体到：镜头距离、运动速度、晃动幅度、主体位置关系，不要使用"平稳跟随跟镜"这类模糊描述
-4. 高风险特效（${fxHighText}）：空镜/无人物分镜可以使用；有人物分镜自动降级为慢速或小幅版本，防止崩坏
-5. 镜头切换遵循"背景继承"：后一镜的机位/光线/场景元素与前一镜自然衔接，无跳变
-
-【专业光影库】（必须从中选择一套作为本分镜的光影方案）
-${LIGHTING_LIBRARY.map(v => `${v.name}：${v.desc}`).join("\n")}
-
-【光影选择规则】
-1. 推荐光影：${recommendedLight.name}（${recommendedLight.desc}），如情绪匹配度更高可另选库内其他方案
-2. 每个镜头都必须写明本段采用的光影方案，不要只写"灯光柔和"这类模糊描述
-3. 光影要与镜头情绪一致，可随剧情节奏在同一分镜内做光影微调（如从暗到亮）
-
-【全局画质硬性约束】（融入 detailed_description 的风格开场句）
-无AI失真脸部，皮肤保留原生毛孔肌理，拒绝过度磨皮、重度美白；人物四肢手部动作自然无畸形，五官脸型全程统一，服装发型配饰前后镜头无改动；画面流畅无抖动、无闪烁卡顿、无崩坏肢体，阴影过渡柔和，无塑料假人质感；人物口型与台词1:1精准同步。
-
-【镜头类型】本分镜按「${refineTpl.label}」细化：
-${refineTpl.guide}
-
-分镜信息：
-- 分镜标题：${sh.title}
-- 场景类型：${sceneType}
-- 用户指定运镜：${cameraMove}（如用户指定了具体运镜，优先使用用户指定的）
-- 推荐运镜：${recommendedCam.name}（${recommendedCam.reason}），无更合适选择时使用此推荐
-- 时长：${shotDuration}秒
-- 分镜描述：${desc}
-- 对话内容：${dialogue}
-- 出场角色：${characters}
-
-直接输出 JSON：`;
-      
-      const res = await api("/api/llm/chat", {
+      // 调调度机 U00 细化端点（Qwen3.8-27B 中文六段，扣 2 积分；参考图=用户手动选择的角色图）
+      const res = await api("/api/video/refine", {
         method: "POST",
         body: JSON.stringify({
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 8192,
+          prompt: shotInfo,
+          reference_images: getShotCharacterImages(sh),
+          style: selectedStyle || "",
+          rules,
         })
       });
-      const refinedText = (res.text || "").trim();
-      if (!refinedText) throw new Error("LLM未返回内容");
+      const refinedText = (res.detailed_description || "").trim();
+      if (!refinedText) throw new Error("U00未返回细化内容");
 
-      // 解析 H3 结构化 JSON（兼容 markdown 代码块包裹）；失败则降级保存原文
-      let savedPromptCn = refinedText;
-      try {
-        const cleaned = refinedText.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-        const parsed = JSON.parse(cleaned);
-        if (parsed && parsed.detailed_description) {
-          savedPromptCn = JSON.stringify({ summary: parsed.summary || "", detailed_description: parsed.detailed_description });
-        }
-      } catch (e) { /* 非 JSON，保留原文 */ }
-
-      // 保存细化后的提示词到promptCn字段（H3模式为 summary+detailed_description 的JSON字符串）
+      // 保存 H3 结构化 JSON 到 promptCn（summary + detailed_description，结构不变，内容为中文）
+      const savedPromptCn = JSON.stringify({ summary: res.summary || "", detailed_description: refinedText });
       update({ shots: shots.map(s => s.id === sh.id ? { ...s, promptCn: savedPromptCn } : s) });
-      log(`✅「${sh.title}」提示词细化成功（${savedPromptCn.length}字符）`);
+      log(`✅「${sh.title}」提示词细化成功（${savedPromptCn.length}字符，U00中文六段）`);
 
-      // 积分扣减已移至后端（/api/llm/chat 按 llm_type 扣费），前端仅刷新余额显示
+      // 积分扣减已移至后端（/api/video/refine 扣 2 积分），前端仅刷新余额显示
       if (isLoggedIn()) {
         try {
           const balanceData = await getCreditBalance();
