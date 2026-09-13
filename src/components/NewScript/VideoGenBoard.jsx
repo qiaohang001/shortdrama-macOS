@@ -207,6 +207,71 @@ const CAMERA_MOVES = {
   macro: { name: "微距特写", desc: "镜头贴近主体进行微距拍摄，突出细微细节（瞳孔、物件纹理、水滴、绣纹），浅景深虚化背景，强化凝视感与情绪张力" }
 };
 
+// 专业镜头语言库（五类，中英对照）——细化时每镜从五维各选一项
+const SHOT_LANGUAGE_LIB = {
+  shotSize: { label: "1、景别与机位", items: [
+    { cn: "微距特写", en: "extreme close-up" },
+    { cn: "中景", en: "medium shot" },
+    { cn: "俯拍45°", en: "45-degree high angle" },
+    { cn: "平视1.65米", en: "eye-level at 1.65m" },
+    { cn: "仰拍0.5米", en: "low angle at 0.5m" },
+    { cn: "全景", en: "full shot" },
+    { cn: "远景", en: "long shot" },
+    { cn: "大远景", en: "extreme long shot" },
+    { cn: "超远景", en: "ultra wide establishing shot" },
+    { cn: "低机位", en: "low camera position" },
+    { cn: "过肩构图", en: "over-the-shoulder" },
+    { cn: "遮挡式构图", en: "framed/obstructed composition" },
+  ]},
+  dof: { label: "2、景深控制", items: [
+    { cn: "浅景深（背景完全模糊）", en: "shallow depth of field, background fully blurred" },
+    { cn: "中等景深（背景轻微模糊）", en: "medium depth of field, background softly blurred" },
+    { cn: "深景深（背景完全清晰）", en: "deep depth of field, background fully sharp" },
+    { cn: "前景对焦", en: "focus on foreground" },
+    { cn: "主体对焦", en: "focus on subject" },
+    { cn: "背景对焦", en: "focus on background" },
+  ]},
+  composition: { label: "3、构图方式", items: [
+    { cn: "左右三分构图", en: "rule of thirds, left-right split" },
+    { cn: "三分加对称构图", en: "rule of thirds with symmetry" },
+    { cn: "黄金分割点站位", en: "golden ratio subject placement" },
+    { cn: "过肩反打", en: "over-the-shoulder reverse shot" },
+    { cn: "Whip Pan/Tilt 重新寻焦", en: "whip pan/tilt refocus" },
+  ]},
+  moveFx: { label: "4、运镜与特效", items: [
+    { cn: "无人机超广角暴力快推", en: "drone ultra-wide aggressive fast push-in", fx: "high" },
+    { cn: "子弹时间", en: "bullet time", fx: "high" },
+    { cn: "慢动作", en: "slow motion", fx: "mid" },
+    { cn: "360°环绕高速旋转", en: "360-degree high-speed orbit", fx: "high" },
+    { cn: "镜头冻结", en: "freeze frame", fx: "mid" },
+    { cn: "Whip Pan 横扫", en: "whip pan sweep", fx: "high" },
+    { cn: "垂直空间Z轴战斗", en: "vertical Z-axis fight choreography", fx: "high" },
+    { cn: "强制抽帧加震动", en: "forced frame skip with camera shake", fx: "high" },
+    { cn: "负片反转", en: "negative inversion", fx: "high" },
+    { cn: "镜头螺旋环绕", en: "spiral orbit around subject", fx: "high" },
+    { cn: "固定镜头", en: "static fixed camera", fx: "low" },
+    { cn: "缓慢推近", en: "slow push-in", fx: "low" },
+    { cn: "缓慢拉远", en: "slow pull-back", fx: "low" },
+    { cn: "水平横摇", en: "slow pan", fx: "low" },
+    { cn: "手持跟拍", en: "handheld follow", fx: "mid" },
+    { cn: "升降镜头", en: "crane up/down", fx: "mid" },
+  ]},
+  focal: { label: "5、焦段参考", items: [
+    { cn: "18mm超广角", en: "18mm ultra-wide lens" },
+    { cn: "24mm广角", en: "24mm wide lens" },
+    { cn: "35mm", en: "35mm lens" },
+    { cn: "50mm", en: "50mm lens" },
+    { cn: "70mm中长焦", en: "70mm medium telephoto" },
+    { cn: "85mm面部近景", en: "85mm facial close-up lens" },
+  ]},
+};
+const SHOT_LANGUAGE_TEXT = Object.values(SHOT_LANGUAGE_LIB)
+  .map(g => `${g.label}：${g.items.map(i => i.cn).join("、")}`).join("\n");
+const SHOT_LANGUAGE_EN = Object.values(SHOT_LANGUAGE_LIB)
+  .map(g => `${g.label} 英文镜语：${g.items.map(i => `${i.cn}→${i.en}`).join("；")}`).join("\n");
+// 高风险特效（人物镜降级为慢速版本，空镜/无人镜可用）
+const SHOT_FX_HIGH = Object.values(SHOT_LANGUAGE_LIB.moveFx.items).filter(i => i.fx === "high").map(i => i.cn).join("、");
+
 // 情绪→运镜自动映射（关键词匹配）
 const EMOTION_CAMERA_MAP = [
   { keywords: ["紧张", "追逐", "打斗", "激烈", "危急", "逃跑", "追杀", "搏斗"], camera: "handheld", reason: "手持跟拍制造紧张代入感" },
@@ -573,11 +638,11 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       // 按分镜实际角色数动态生成 H3 Subject 分配说明（0人=空镜 / 1人 / N人）
       let subjectAssign, subjectUse, extraRule, shotBodyRule, appearanceRule;
       if (nChar === 0) {
-        subjectAssign = "<Subject 1> 是场景环境（来自 <Picture 1>），本镜头为纯场景空镜，画面中不得出现任何人物";
+        subjectAssign = "<Subject 1> 是场景环境（来自 <Picture 1>），本镜头未绑定角色参考图，以场景环境为主体；分镜描述中明确出现的特定人物（如倒伏的护卫、尸体、看守、人群等）按画面内容保留呈现";
         subjectUse = "场景环境全程用 <Subject 1>";
-        extraRule = "【本镜头为纯场景空镜：画面中严禁出现任何人物、人影、背影、路人或人群，只允许场景与道具存在】";
-        shotBodyRule = "场景主体元素的位置与变化（本镜无人物）";
-        appearanceRule = "（空镜无角色，无需外貌描述）";
+        extraRule = "【本镜头未绑定角色参考图：禁止出现分镜描述之外的任何人物、路人、人群或额外角色；但分镜描述中明确写到的特定人物（如倒伏的护卫、尸体、看守、侍女等）必须严格按原描述保留在画面中，作为画面内容呈现，不作为角色锁脸、不需要外貌特写】";
+        shotBodyRule = "场景主体元素的位置与变化；分镜描述中明确出现的特定人物（如倒伏护卫、尸体）按其位置与状态呈现";
+        appearanceRule = "（空镜无绑定角色，无需外貌描述）";
       } else {
         const subjNames = charList
           .map((c, i) => `<Subject ${i + 1}> 是出场角色${i + 1}（${c}，外观与身份来自 <Picture ${i + 1}>）`)
@@ -594,9 +659,11 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       // 当前选中的镜头分类模板（auto=让LLM自动判断类型）
       const refineTpl = REFINE_TEMPLATES.find(t => t.key === refineType) || REFINE_TEMPLATES[0];
       const recommendedCam = recommendCamera(desc, sh.title || "", dialogue);
-      const cameraLibText = Object.entries(CAMERA_MOVES).map(([k, v]) => `${v.name}：${v.desc}`).join("\n");
       
       const recommendedLight = recommendLighting(desc, sh.title || "", dialogue);
+      const shotLibText = SHOT_LANGUAGE_TEXT;
+      const shotLibEnText = SHOT_LANGUAGE_EN;
+      const fxHighText = SHOT_FX_HIGH;
       const prompt = `你是一名专业的AI视频生成提示词工程师，精通MiniMax H3视频生成模型官方提示词规范（Full-Reference / Ref2VA 六段结构）。
 
 请将以下简单的分镜描述，细化成符合 H3 官方规范的英文结构化提示词（summary + detailed_description 两个字段）。
@@ -612,18 +679,22 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
 【detailed_description 要求】英文，300-500 词，严格按播放时间分镜头（本分镜 ${shotDuration} 秒，三段）：
 - [Shot 1] 开头不写时间戳；[Shot 2] At 00:03.000；[Shot 3] At 00:07.000（或按总时长比例分配）
 - 开头先用 1-2 句英文交代整体风格与光影基调（从下方光影库选择）
-- 每个镜头依次写：①景别与构图 ②${shotBodyRule} ③可见的状态变化（表情/姿势/光影/物体位置）④运镜（从运镜库选择，写清距离/速度/幅度/方向，不运镜就写静态机位）⑤本段光影方案（光源类型+色温+方向+明暗对比）⑥声音或台词（台词用 <d>[Chinese] 完整台词。</d>，与口型同步）
+- 每个镜头依次写：①景别与机位 ②景深 ③构图方式 ④运镜与特效（从镜头语言库选择，写清英文镜语、距离/速度/幅度/方向，明确不运镜的才写 static fixed camera）⑤焦段（从焦段库选择）⑥${shotBodyRule} ⑦可见的状态变化（表情/姿势/光影/物体位置）⑧本段光影方案（光源类型+色温+方向+明暗对比）⑨声音或台词（台词用 <d>[Chinese] 完整台词。</d>，与口型同步）
 - ${subjectUse}；${extraRule}
 - ${appearanceRule}
 
-【专业运镜库】（必须从中选择，禁止自创）
-${cameraLibText}
+【专业镜头语言库】（五类，从中选择，禁止自创）
+${shotLibText}
 
-【运镜选择规则】
-1. 根据分镜的情绪和动作选择最匹配的运镜
-2. 推荐运镜：${recommendedCam.name}（${recommendedCam.reason}），如无更合适的选择请使用此推荐
-3. 运镜描述要具体到：镜头距离、运动速度、晃动幅度、主体位置关系
-4. 不要使用"平稳跟随跟镜"这类模糊描述
+【镜头语言英文镜语对照】（规划用中文，写进 prompt 用英文）
+${shotLibEnText}
+
+【镜头语言规则（硬性）】
+1. 每个镜头必须写全五维：景别与机位、景深、构图、运镜与特效、焦段，缺一不可
+2. ${shotDuration >= 8 ? "本分镜时长≥8秒：至少使用 2 个不同的镜头语言（不同景别 或 不同运镜，可在两个镜头的边界切换），禁止全程固定镜头，除非分镜明确要求监控/客观静止视角" : "本分镜时长较短：至少规划 1 个明确运镜，避免全程固定镜头"}
+3. 运镜描述要具体到：镜头距离、运动速度、晃动幅度、主体位置关系，不要使用"平稳跟随跟镜"这类模糊描述
+4. 高风险特效（${fxHighText}）：空镜/无人物分镜可以使用；有人物分镜自动降级为慢速或小幅版本，防止崩坏
+5. 镜头切换遵循"背景继承"：后一镜的机位/光线/场景元素与前一镜自然衔接，无跳变
 
 【专业光影库】（必须从中选择一套作为本分镜的光影方案）
 ${LIGHTING_LIBRARY.map(v => `${v.name}：${v.desc}`).join("\n")}
@@ -643,6 +714,7 @@ ${refineTpl.guide}
 - 分镜标题：${sh.title}
 - 场景类型：${sceneType}
 - 用户指定运镜：${cameraMove}（如用户指定了具体运镜，优先使用用户指定的）
+- 推荐运镜：${recommendedCam.name}（${recommendedCam.reason}），无更合适选择时使用此推荐
 - 时长：${shotDuration}秒
 - 分镜描述：${desc}
 - 对话内容：${dialogue}
