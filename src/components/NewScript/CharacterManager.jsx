@@ -417,6 +417,13 @@ ${content.slice(0, 5000)}
       setGeneratingFourViewIds(prev => { const next = {...prev}; delete next[char.id]; return next; });
       return;
     }
+    // 四视图是图生图：必须有人物参考图
+    if (!char.image) {
+      log(`❌ 请先生成「${char.name}」的人物参考图，再生成四视图`);
+      alert(`请先生成「${char.name}」的人物参考图，再生成四视图`);
+      setGeneratingFourViewIds(prev => { const next = {...prev}; delete next[char.id]; return next; });
+      return;
+    }
     // 积分预校验（四视图复用图片生成价格，从调度机获取）
     const fourViewPrice = getPrice("image_generate", 1.0);
     try {
@@ -430,15 +437,15 @@ ${content.slice(0, 5000)}
     } catch (e) {
       log(`⚠️ 积分预校验失败：${e.message}`);
     }
-    log(`正在为「${char.name}」生成Krea2四视图...`);
+    log(`正在为「${char.name}」生成Krea2四视图（参考人物图）...`);
     try {
       const styleObj = STYLE_OPTIONS.find(s => s.value === selectedStyle) || STYLE_OPTIONS[0];
-      // 角色外观描述 + 风格（四视图布局由T100工作流内部完成）
+      // 角色外观描述 + 风格（四视图以人物参考图为主，图生图由T10工作流完成）
       const basePrompt = buildCharacterBasePrompt(char);
       const prompt = injectStyleDesc(basePrompt, styleObj.desc);
       const res = await api("/api/image/four-view", {
         method: "POST",
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, image_url: char.image }),
       });
       const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
       if (!imageUrl) throw new Error("未返回四视图图片地址");
