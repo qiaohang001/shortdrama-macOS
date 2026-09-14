@@ -681,6 +681,7 @@ async function synthesizeSpeech(
   speed = 1.0,
   emotion = '',
   model = '',
+  voiceDescription = '',
 ) {
   try {
     const token = getAuthToken();
@@ -697,6 +698,7 @@ async function synthesizeSpeech(
         emotion: emotion,
         model: (model && model.toLowerCase().includes('turbo')) ? 'speech-2.8-turbo' : 'speech-2.8-hd',
         format: 'mp3',
+        voice_prompt: voiceDescription,
       }),
     });
 
@@ -894,6 +896,7 @@ export function DubbingBoard({ project, update, log, incomingChunk = "", incomin
   const [customVoices, setCustomVoices] = useState([]);
   const [showVoiceDesigner, setShowVoiceDesigner] = useState(false);
   const [voicePrompt, setVoicePrompt] = useState('');
+  const [voiceDescription, setVoiceDescription] = useState('');
   const [previewText, setPreviewText] =
     useState('大家好，这是我用文字创建的专属音色。');
   const [voiceName, setVoiceName] = useState('');
@@ -1120,6 +1123,7 @@ export function DubbingBoard({ project, update, log, incomingChunk = "", incomin
         speed,
         dialogueEmotion,
         ttsModel,
+        voiceDescription,
       );
       setDialogues((prev) =>
         prev.map((d) =>
@@ -1472,21 +1476,6 @@ export function DubbingBoard({ project, update, log, incomingChunk = "", incomin
             <span style={{ fontSize: 12, color: 'var(--text-muted, #888)' }}>
               默认音色
             </span>
-            <button
-              onClick={() => setShowVoiceDesigner(true)}
-              style={{
-                padding: '3px 8px',
-                border: '1px solid #7a5cff',
-                borderRadius: 4,
-                background: 'rgba(122,92,255,0.1)',
-                color: '#7a5cff',
-                cursor: 'pointer',
-                fontSize: 10,
-                fontWeight: 600,
-              }}
-            >
-              ✨ 文字创建音色
-            </button>
           </div>
           <select
             value={selectedVoice}
@@ -1568,6 +1557,24 @@ export function DubbingBoard({ project, update, log, incomingChunk = "", incomin
               </optgroup>
             )}
           </select>
+          {/* 自定义音色描述（可选）：填写后优先使用，不填则使用上方所选音色 */}
+          <input
+            type="text"
+            value={voiceDescription}
+            onChange={(e) => setVoiceDescription(e.target.value)}
+            placeholder="自定义音色描述（可选）：如 温柔的女性声音，语速缓慢，略带沙哑"
+            style={{
+              width: '100%',
+              padding: '8px 10px',
+              border: '1px solid var(--border, #2a2a4a)',
+              borderRadius: 6,
+              background: 'var(--input-bg, #15152a)',
+              color: 'var(--text, #fff)',
+              fontSize: 12,
+              boxSizing: 'border-box',
+              marginBottom: 8,
+            }}
+          />
           <div
             style={{
               fontSize: 12,
@@ -2514,262 +2521,6 @@ export function DubbingBoard({ project, update, log, incomingChunk = "", incomin
         </div>
       )}
 
-      {/* 声音设计弹窗 */}
-      {showVoiceDesigner && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.7)',
-            backdropFilter: 'blur(4px)',
-            zIndex: 9999,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-          onClick={() => !creatingVoice && setShowVoiceDesigner(false)}
-        >
-          <div
-            style={{
-              width: 650,
-              maxWidth: '95%',
-              background: 'var(--panel, #1a1a2e)',
-              border: '1px solid var(--border, #2a2a4a)',
-              borderRadius: 16,
-              padding: 28,
-              boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: 20,
-              }}
-            >
-              <h3
-                style={{ margin: 0, fontSize: 20, color: 'var(--text, #fff)' }}
-              >
-                ✨ 文字创建音色
-              </h3>
-              <button
-                onClick={() => !creatingVoice && setShowVoiceDesigner(false)}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--text-muted, #888)',
-                  fontSize: 20,
-                  cursor: 'pointer',
-                }}
-              >
-                ×
-              </button>
-            </div>
-
-            <div style={{ marginBottom: 16 }}>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: 'var(--text-muted, #888)',
-                  marginBottom: 6,
-                }}
-              >
-                快速模板
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {VOICE_PROMPT_TEMPLATES.map((t, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setVoicePrompt(t.prompt)}
-                    style={{
-                      padding: '4px 10px',
-                      border: '1px solid var(--border, #2a2a4a)',
-                      borderRadius: 12,
-                      background: 'var(--input-bg, #15152a)',
-                      color: 'var(--text, #aaa)',
-                      cursor: 'pointer',
-                      fontSize: 11,
-                    }}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ marginBottom: 16 }}>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: 'var(--text-muted, #888)',
-                  marginBottom: 6,
-                }}
-              >
-                声音描述 *{' '}
-                <span style={{ fontSize: 10, color: '#666' }}>
-                  （描述音色特征，如性别、年龄、音质、语速、情感）
-                </span>
-              </div>
-              <textarea
-                value={voicePrompt}
-                onChange={(e) => setVoicePrompt(e.target.value)}
-                placeholder="例如：温柔的年轻女性声音，语速适中，情感丰富，略带沙哑，说话节奏缓慢"
-                rows={3}
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid var(--border, #2a2a4a)',
-                  borderRadius: 8,
-                  background: 'var(--input-bg, #15152a)',
-                  color: 'var(--text, #fff)',
-                  fontSize: 13,
-                  resize: 'vertical',
-                  fontFamily: 'inherit',
-                }}
-                maxLength={500}
-              />
-              <div
-                style={{
-                  fontSize: 10,
-                  color: 'var(--text-muted, #666)',
-                  textAlign: 'right',
-                  marginTop: 4,
-                }}
-              >
-                {voicePrompt.length}/500
-              </div>
-            </div>
-
-            <div style={{ marginBottom: 16 }}>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: 'var(--text-muted, #888)',
-                  marginBottom: 6,
-                }}
-              >
-                预览文本 *{' '}
-                <span style={{ fontSize: 10, color: '#666' }}>
-                  （创建音色时会用这段文本生成试听音频）
-                </span>
-              </div>
-              <input
-                type="text"
-                value={previewText}
-                onChange={(e) => setPreviewText(e.target.value)}
-                placeholder="请输入预览文本"
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid var(--border, #2a2a4a)',
-                  borderRadius: 8,
-                  background: 'var(--input-bg, #15152a)',
-                  color: 'var(--text, #fff)',
-                  fontSize: 13,
-                }}
-                maxLength={200}
-              />
-            </div>
-
-            <div style={{ marginBottom: 20 }}>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: 'var(--text-muted, #888)',
-                  marginBottom: 6,
-                }}
-              >
-                音色名称（选填）
-              </div>
-              <input
-                type="text"
-                value={voiceName}
-                onChange={(e) => setVoiceName(e.target.value)}
-                placeholder="例如：温柔女主"
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid var(--border, #2a2a4a)',
-                  borderRadius: 8,
-                  background: 'var(--input-bg, #15152a)',
-                  color: 'var(--text, #fff)',
-                  fontSize: 13,
-                }}
-                maxLength={16}
-              />
-            </div>
-
-            <button
-              onClick={handleCreateVoice}
-              disabled={
-                creatingVoice || !voicePrompt.trim() || !previewText.trim()
-              }
-              style={{
-                width: '100%',
-                padding: '14px 0',
-                border: 'none',
-                borderRadius: 10,
-                background: creatingVoice
-                  ? '#555'
-                  : 'linear-gradient(135deg, #7a5cff, #5ce1e6)',
-                color: '#fff',
-                cursor: creatingVoice ? 'wait' : 'pointer',
-                fontSize: 15,
-                fontWeight: 600,
-              }}
-            >
-              {creatingVoice ? '创建中...' : '🎵 创建音色（60积分）'}
-            </button>
-
-            {customVoices.length > 0 && (
-              <div
-                style={{
-                  marginTop: 16,
-                  paddingTop: 16,
-                  borderTop: '1px solid var(--border, #2a2a4a)',
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: 'var(--text-muted, #888)',
-                    marginBottom: 8,
-                  }}
-                >
-                  已创建的自定义音色（{customVoices.length}）
-                </div>
-                {customVoices.map((v, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      padding: '8px 10px',
-                      background: 'var(--input-bg, #15152a)',
-                      borderRadius: 6,
-                      marginBottom: 4,
-                      fontSize: 12,
-                    }}
-                  >
-                    <span style={{ color: '#7a5cff', fontWeight: 600 }}>
-                      {v.name}
-                    </span>
-                    <span
-                      style={{
-                        color: 'var(--text-muted, #666)',
-                        marginLeft: 8,
-                        fontSize: 10,
-                      }}
-                    >
-                      {v.id.substring(0, 20)}...
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
