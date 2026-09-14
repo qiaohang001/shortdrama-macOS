@@ -6,17 +6,17 @@
 // 默认价格（当调度机接口不可用时使用）
 const DEFAULT_PRICING = {
   // 图片生成
-  image_generate: 3.0,
+  image_generate: 1.0,
   // 配音生成（按模型+条收费）
-  tts_hd_per_line: 2.5,
-  tts_turbo_per_line: 1.5,
-  tts_min_charge: 1.0,
+  tts_hd_per_line: 0.5,
+  tts_turbo_per_line: 0.5,
+  tts_min_charge: 0.5,
   // 兼容旧字段（按字符数收费）
-  tts_hd_per_100_chars: 0.25,
-  tts_turbo_per_100_chars: 0.2,
+  tts_hd_per_100_chars: 0.1,
+  tts_turbo_per_100_chars: 0.1,
   // 文字创建音色（成本9.9元=49.5积分）
-  voice_design_preview_per_10k_chars: 2.0,
-  voice_design_first_use: 60.0,
+  voice_design_preview_per_10k_chars: 1.0,
+  voice_design_first_use: 10.0,
   voice_design_min_charge: 1.0,
   // LLM文本生成
   llm_script_analyze: 2.0,
@@ -32,28 +32,28 @@ const DEFAULT_PRICING = {
   llm_scene_refine: 1.0,
   llm_subtitle_generate: 1.0,
   // 视频生成
-  video_t2v_480p: 1.0,
-  video_t2v_768p: 2.0,
-  video_t2v_1080p: 4.0,
-  video_i2v_480p: 1.0,
-  video_i2v_768p: 2.0,
-  video_i2v_1080p: 4.0,
-  video_r2v_480p: 2.0,
-  video_r2v_768p: 3.0,
-  video_r2v_1080p: 5.0,
-  video_ia2v_480p: 2.0,
-  video_ia2v_768p: 3.0,
-  video_ia2v_1080p: 5.0,
+  video_t2v_480p: 0.5,
+  video_t2v_768p: 0.8,
+  video_t2v_1080p: 1.0,
+  video_i2v_480p: 0.5,
+  video_i2v_768p: 0.8,
+  video_i2v_1080p: 1.0,
+  video_r2v_480p: 0.5,
+  video_r2v_768p: 0.8,
+  video_r2v_1080p: 1.0,
+  video_ia2v_480p: 0.5,
+  video_ia2v_768p: 0.8,
+  video_ia2v_1080p: 1.0,
   // 视频三渠道价格表（按渠道+分辨率 积分/秒；/api/pricing 返回同结构）
   video: {
-    autodl: { "480p": 1.0, "768p": 2.0, "1080p": 3.0 },
-    wan22:  { "480p": 3.0, "576p": 4.0, "720p": 5.0, "1080p": 6.0 },
+    autodl: { "480p": 0.5, "768p": 0.8, "1080p": 1.0 },
+    wan22:  { "480p": 1.0, "576p": 1.2, "720p": 1.5, "1080p": 2.0 },
     kling:  { "480p": 5.0, "768p": 7.0, "1080p": 9.0 },
   },
   // 视频渠道元数据（名称/描述）
   video_providers: {
     autodl: { name: "标准", desc: "MiniMax H3 · AutoDL 托管" },
-    wan22:  { name: "高级生成", desc: "MiniMax H3 自部署 · 720P=5/1080P=6积分/秒" },
+    wan22:  { name: "高级生成", desc: "MiniMax H3 自部署 · 720P=1.5/1080P=2积分/秒" },
     kling:  { name: "可灵 3.0", desc: "kling-v3-omni 高画质 · 首帧+参考图" },
   },
   // 3D生成
