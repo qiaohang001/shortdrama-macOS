@@ -130,6 +130,7 @@ export function CharacterManager({ project, update, log }) {
   }, []);
 
   const [generatingCharIds, setGeneratingCharIds] = useState({}); // {charId: true} 支持多个人物同时生成
+  const [generatingFourViewIds, setGeneratingFourViewIds] = useState({}); // {charId: true} 四视图生成中
   const [refiningCharId, setRefiningCharId] = useState(""); // 正在细化提示词的角色
   const [previewImage, setPreviewImage] = useState(null);
   const [selectedStyle, setSelectedStyle] = useState(() => {
@@ -326,7 +327,7 @@ ${content.slice(0, 5000)}
       return;
     }
     // 积分预校验（角色生图价格从调度机获取）
-    const charImagePrice = getPrice("image_generate", 3.0);
+    const charImagePrice = getPrice("image_generate", 1.0);
     try {
       const precheck = await precheckCredits(charImagePrice, "image", `角色生图：${char.name}`);
       if (!precheck.sufficient && precheck.sufficient !== undefined) {
@@ -338,14 +339,14 @@ ${content.slice(0, 5000)}
     } catch (e) {
       log(`⚠️ 积分预校验失败：${e.message}`);
     }
-    log(`正在为「${char.name}」生成四视图...`);
+    log(`正在为「${char.name}」生成人物参考图...`);
     try {
       const styleObj = STYLE_OPTIONS.find(s => s.value === selectedStyle) || STYLE_OPTIONS[0];
-      // 四视图 = 四宫格（左上正面全身/右上侧面全身/左下背面全身/右下面部特写，横版 1672×941），视频生成时用这张做人物锁定，利于 H3 识别角色
-      const basePrompt = buildCharacterSheetPrompt(char);
+      // 单张人物参考图（正常竖版人物图，无四视图布局要求），视频生成时用这张做人物锁定
+      const basePrompt = buildCharacterBasePrompt(char);
       // 生成时注入所选风格描述
       const prompt = injectStyleDesc(basePrompt, styleObj.desc);
-      const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1672x941", n: 1 });
+      const res = await generateImage({ prompt, model: "Qwen/Qwen-Image", size: "1024x1024", n: 1 });
       const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
       if (!imageUrl) throw new Error("未返回图片地址");
       // 使用函数式更新，确保使用最新的状态，并使用ID匹配人物
@@ -370,10 +371,10 @@ ${content.slice(0, 5000)}
         const newImageAsset = {
           id: "a_char_image_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8),
           type: "image",
-          title: `${char.name}四视图（${styleObj.label}，${new Date().toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}）`,
+          title: `${char.name}人物参考图（${styleObj.label}，${new Date().toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}）`,
           url: imageUrl,
           status: "ready",
-          tags: ["四视图", "角色生图", styleObj.label, char.name],
+          tags: ["人物参考图", "角色生图", styleObj.label, char.name],
           favorite: false,
           characterId: char.id,
           characterName: char.name,
@@ -385,7 +386,7 @@ ${content.slice(0, 5000)}
       } catch (e) {
         log(`⚠️ 角色图存入素材库失败：${e.message}`);
       }
-      log(`「${char.name}」四视图生成成功`);
+      log(`「${char.name}」人物参考图生成成功`);
       // 积分扣减（角色生图价格从调度机获取）
       if (isLoggedIn()) {
         try {
@@ -403,6 +404,94 @@ ${content.slice(0, 5000)}
       log(`生成失败：${err.message}`);
     } finally {
       setGeneratingCharIds(prev => { const next = {...prev}; delete next[char.id]; return next; });
+    }
+  };
+
+  // AI生成Krea2四视图（T100-Krea2做剧图像4视图工作流，经调度机 /api/image/four-view）
+  const generateFourViewImage = async (char) => {
+    if (generatingFourViewIds[char.id]) return; // 该人物正在生成中，忽略重复点击
+    setGeneratingFourViewIds(prev => ({ ...prev, [char.id]: true }));
+    // 未登录用户不能使用
+    if (!isLoggedIn()) {
+      alert("请先登录后再使用四视图生成功能");
+      setGeneratingFourViewIds(prev => { const next = {...prev}; delete next[char.id]; return next; });
+      return;
+    }
+    // 积分预校验（四视图复用图片生成价格，从调度机获取）
+    const fourViewPrice = getPrice("image_generate", 1.0);
+    try {
+      const precheck = await precheckCredits(fourViewPrice, "image", `Krea2四视图：${char.name}`);
+      if (!precheck.sufficient && precheck.sufficient !== undefined) {
+        log(`❌ 积分不足：需要${fourViewPrice}积分，当前余额${precheck.balance || 0}积分`);
+        alert(`积分不足！生成四视图需要${fourViewPrice}积分，当前余额${precheck.balance || 0}积分。请充值后再试。`);
+        setGeneratingFourViewIds(prev => { const next = {...prev}; delete next[char.id]; return next; });
+        return;
+      }
+    } catch (e) {
+      log(`⚠️ 积分预校验失败：${e.message}`);
+    }
+    log(`正在为「${char.name}」生成Krea2四视图...`);
+    try {
+      const styleObj = STYLE_OPTIONS.find(s => s.value === selectedStyle) || STYLE_OPTIONS[0];
+      // 角色外观描述 + 风格（四视图布局由T100工作流内部完成）
+      const basePrompt = buildCharacterBasePrompt(char);
+      const prompt = injectStyleDesc(basePrompt, styleObj.desc);
+      const res = await api("/api/image/four-view", {
+        method: "POST",
+        body: JSON.stringify({ prompt }),
+      });
+      const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
+      if (!imageUrl) throw new Error("未返回四视图图片地址");
+      update(prev => {
+        const allChars = prev.materials?.characters || [];
+        const newChars = allChars.map(x => {
+          const matched = (x.id && char.id) ? (x.id === char.id) : (x.name === char.name);
+          if (matched) {
+            return { ...x, fourView: imageUrl };
+          }
+          return x;
+        });
+        return { materials: { ...prev.materials, characters: newChars } };
+      });
+      // 同时存入素材库（不覆盖）
+      try {
+        const currentAssets = project?.assets || [];
+        const newImageAsset = {
+          id: "a_char_fourview_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8),
+          type: "image",
+          title: `${char.name}四视图（${styleObj.label}，${new Date().toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}）`,
+          url: imageUrl,
+          status: "ready",
+          tags: ["四视图", "角色生图", styleObj.label, char.name],
+          favorite: false,
+          characterId: char.id,
+          characterName: char.name,
+          style: selectedStyle,
+          createdAt: Date.now()
+        };
+        update({ assets: [newImageAsset, ...currentAssets] });
+        log(`✅ 四视图已存入素材库：${newImageAsset.title}`);
+      } catch (e) {
+        log(`⚠️ 四视图存入素材库失败：${e.message}`);
+      }
+      log(`「${char.name}」Krea2四视图生成成功`);
+      // 积分扣减（四视图价格从调度机获取）
+      if (isLoggedIn()) {
+        try {
+          log(`✅ 积分扣减成功：${fourViewPrice}积分`);
+          try {
+            const balanceData = await getCreditBalance();
+            if (window.onCreditUpdate) window.onCreditUpdate(balanceData.balance || balanceData.credits || 0);
+            if (window.refreshUserInfo) window.refreshUserInfo();
+          } catch (e) {}
+        } catch (e) {
+          log(`⚠️ 积分扣减失败：${e.message}`);
+        }
+      }
+    } catch (err) {
+      log(`四视图生成失败：${err.message}`);
+    } finally {
+      setGeneratingFourViewIds(prev => { const next = {...prev}; delete next[char.id]; return next; });
     }
   };
 
@@ -458,6 +547,14 @@ ${content.slice(0, 5000)}
                   🖼 三视图
                 </button>
               )}
+              {c.fourView && (
+                <button
+                  style={{ position: "absolute", right: 4, bottom: 4, padding: "2px 7px", fontSize: 10, border: "1px solid rgba(255,255,255,0.4)", borderRadius: 4, background: "rgba(0,0,0,0.6)", color: "#fff", cursor: "pointer", zIndex: 2 }}
+                  onClick={(e) => { e.stopPropagation(); setPreviewImage(c.fourView); }}
+                >
+                  🧩 四视图
+                </button>
+              )}
             </div>
             <div style={{ fontWeight: 600 }}>{c.name}</div>
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>{c.role || "未设定"}</div>
@@ -477,9 +574,17 @@ ${content.slice(0, 5000)}
                 style={{ flex: 1, minWidth: "45%", padding: "4px 0", border: generatingCharIds[c.id] ? "1px solid #f59e0b" : "1px solid #7A5CFF", borderRadius: 4, background: generatingCharIds[c.id] ? "rgba(245,158,11,0.15)" : "rgba(122,92,255,0.15)", color: generatingCharIds[c.id] ? "#f59e0b" : "#7A5CFF", fontSize: 11, cursor: generatingCharIds[c.id] ? "wait" : "pointer" }}
                 onClick={() => generateCharacterImage(c)}
                 disabled={generatingCharIds[c.id]}
-                title="生成四视图（正面/侧面/背面全身 + 面部特写），用于视频锁人物与人物卡展示"
+                title="生成单张人物参考图，用于视频锁人物与人物卡展示"
               >
-                {generatingCharIds[c.id] ? "⏳ 生成中..." : `🖼 四视图（${getPrice("image_generate", 3.0)}积分）`}
+                {generatingCharIds[c.id] ? "⏳ 生成中..." : `🖼 人物参考图（${getPrice("image_generate", 1.0)}积分）`}
+              </button>
+              <button
+                style={{ flex: 1, minWidth: "45%", padding: "4px 0", border: generatingFourViewIds[c.id] ? "1px solid #f59e0b" : "1px solid #10b981", borderRadius: 4, background: generatingFourViewIds[c.id] ? "rgba(245,158,11,0.15)" : "rgba(16,185,129,0.12)", color: generatingFourViewIds[c.id] ? "#f59e0b" : "#10b981", fontSize: 11, cursor: generatingFourViewIds[c.id] ? "wait" : "pointer" }}
+                onClick={() => generateFourViewImage(c)}
+                disabled={generatingFourViewIds[c.id]}
+                title="生成Krea2四视图（正面/侧面/背面 + 面部特写）"
+              >
+                {generatingFourViewIds[c.id] ? "⏳ 生成中..." : `🧩 Krea2四视图（${getPrice("image_generate", 1.0)}积分）`}
               </button>
               <button
                 style={{ flex: 1, minWidth: "45%", padding: "4px 0", border: "1px solid var(--border)", borderRadius: 4, background: "transparent", color: "var(--text)", fontSize: 11, cursor: "pointer" }}

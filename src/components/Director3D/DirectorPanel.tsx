@@ -1,4 +1,4 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { api } from '../../dispatch-jobs.js';
 import { isLoggedIn } from '../../utils/backend-api.js';
 import { saveBlob } from '../../utils.js';
@@ -488,54 +488,37 @@ export function DirectorPanel({ project, update, log }: { project?: any; update?
                     if (!selectedChar) return;
                     // 未登录用户不能使用
                     if (!isLoggedIn()) {
-                      alert("请先登录后再使用人物参考图生成功能");
+                      alert("请先登录后再使用3D四视图生成功能");
                       return;
                     }
                     try {
+                      const hasRefImage = !!selectedChar.imageUrl;
                       const charDesc = `动漫风格角色，角色「${selectedChar.name}」，${selectedChar.outfit || "日常服装"}，${selectedChar.hairColor ? `发色${selectedChar.hairColor}` : "黑色头发"}`;
-                      log?.(`正在为「${selectedChar.name}」生成人物参考图...`);
-                      const imgRes = await api("/api/image/generate", {
-                        method: "POST",
-                        body: JSON.stringify({ prompt: charDesc, model: "Qwen/Qwen-Image", n: 1 }),
-                      });
-                      if (!imgRes?.image_url) throw new Error("人物参考图生成失败");
-                      updateCharacter(selectedChar.id, { imageUrl: imgRes.image_url });
-                      log?.(`「${selectedChar.name}」人物参考图生成完成`);
-                    } catch (e: any) {
-                      log?.(`人物参考图生成失败: ${e.message}`);
-                    }
-                  }}
-                  style={{ width: '100%', padding: '6px', background: selectedChar.imageUrl ? 'linear-gradient(135deg, #10b981, #059669)' : 'linear-gradient(135deg, #7A5CFF, #5CE1E6)', border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer', fontSize: '11px' }}
-                >
-                  🎨 生成人物参考图（1积分）
-                </button>
-
-                <button
-                  onClick={async () => {
-                    if (!selectedChar) return;
-                    // 未登录用户不能使用
-                    if (!isLoggedIn()) {
-                      alert("请先登录后再使用四视图生成功能");
-                      return;
-                    }
-                    try {
-                      const charDesc = `动漫风格角色，角色「${selectedChar.name}」，${selectedChar.outfit || "日常服装"}，${selectedChar.hairColor ? `发色${selectedChar.hairColor}` : "黑色头发"}`;
-                      log?.(`正在为「${selectedChar.name}」生成Krea2四视图...`);
-                      const fvRes = await api("/api/image/four-view", {
-                        method: "POST",
-                        body: JSON.stringify({ prompt: charDesc }),
-                      });
-                      if (!fvRes?.image_url) throw new Error("四视图生成失败");
-                      const grid = fvRes.image_url;
-                      updateCharacter(selectedChar.id, { fourViews: { front: grid, left: grid, back: grid, right: grid } });
-                      log?.(`「${selectedChar.name}」Krea2四视图生成完成`);
+                      log?.(`正在为「${selectedChar.name}」生成四视图${hasRefImage ? '（参考角色图）' : ''}...`);
+                      const views = [
+                        { key: "front", label: "正面全身照，正视角，纯色背景" },
+                        { key: "left", label: "左侧全身照，左90度视角，纯色背景" },
+                        { key: "back", label: "背面全身照，背视角，纯色背景" },
+                        { key: "right", label: "右侧全身照，右90度视角，纯色背景" },
+                      ];
+                      const fourViews: any = {};
+                      for (const v of views) {
+                        const imgRes = await api("/api/image/generate", {
+                          method: "POST",
+                          body: JSON.stringify({ prompt: `${charDesc}，${v.label}`, model: "Qwen/Qwen-Image", n: 1 }),
+                        });
+                        if (!imgRes?.image_url) throw new Error("四视图图片生成失败");
+                        fourViews[v.key] = imgRes.image_url;
+                      }
+                      updateCharacter(selectedChar.id, { fourViews });
+                      log?.(`「${selectedChar.name}」四视图生成完成${hasRefImage ? '（参考角色图）' : ''}`);
                     } catch (e: any) {
                       log?.(`四视图生成失败: ${e.message}`);
                     }
                   }}
-                  style={{ width: '100%', padding: '6px', background: 'linear-gradient(135deg, #7A5CFF, #5CE1E6)', border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer', fontSize: '11px' }}
+                  style={{ width: '100%', padding: '6px', background: selectedChar.imageUrl ? 'linear-gradient(135deg, #10b981, #059669)' : 'linear-gradient(135deg, #7A5CFF, #5CE1E6)', border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer', fontSize: '11px' }}
                 >
-                  🖼 Krea2四视图（1积分）
+                  {selectedChar.imageUrl ? '🎨 参考图生成四视图（8积分）' : '🎨 生成角色四视图（8积分）'}
                 </button>
 
                 <button
