@@ -226,6 +226,26 @@ export async function generateImage({ prompt, model = "Qwen/Qwen-Image", size = 
   return await api("/api/image/generate", { method: "POST", body: JSON.stringify(payload) });
 }
 
+/**
+ * 图生图（A09-QwenControlNet）：参考图 + 提示词，自动计费。
+ * @param {Object} params
+ * @param {string} params.image_url      - 参考图 URL（必传）
+ * @param {string} params.prompt         - 正向提示词
+ * @param {string} [params.negative_prompt] - 负向提示词
+ * @param {number} [params.seed]         - 种子
+ * @returns {Promise<{image_url: string, credits_used: number}>}
+ */
+export async function img2imgImage({ image_url, prompt, negative_prompt = "", seed = 0 }) {
+  if (!token()) {
+    throw new DispatchError("未登录调度机，请先在「设置」中登录。", { status: 401 });
+  }
+  if (!image_url || !prompt) {
+    throw new DispatchError("图生图需要参考图与提示词", { status: 422 });
+  }
+  const payload = { image_url, prompt, negative_prompt, seed };
+  return await api("/api/image/img2img", { method: "POST", body: JSON.stringify(payload) });
+}
+
 export { DispatchError };
 export { api };
 

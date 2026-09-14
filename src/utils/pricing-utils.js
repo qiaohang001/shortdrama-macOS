@@ -44,17 +44,15 @@ const DEFAULT_PRICING = {
   video_ia2v_480p: 0.5,
   video_ia2v_768p: 0.8,
   video_ia2v_1080p: 1.0,
-  // 视频三渠道价格表（按渠道+分辨率 积分/秒；/api/pricing 返回同结构）
+  // 视频渠道价格表（按渠道+分辨率 积分/秒；/api/pricing 返回同结构）
   video: {
     autodl: { "480p": 0.5, "768p": 0.8, "1080p": 1.0 },
     wan22:  { "480p": 1.0, "576p": 1.2, "720p": 1.5, "1080p": 2.0 },
-    kling:  { "480p": 5.0, "768p": 7.0, "1080p": 9.0 },
   },
   // 视频渠道元数据（名称/描述）
   video_providers: {
-    autodl: { name: "标准", desc: "MiniMax H3 · AutoDL 托管" },
+    autodl: { name: "标准", desc: "MiniMax H3 · 实例面板工作流" },
     wan22:  { name: "高级生成", desc: "MiniMax H3 自部署 · 720P=1.5/1080P=2积分/秒" },
-    kling:  { name: "可灵 3.0", desc: "kling-v3-omni 高画质 · 首帧+参考图" },
   },
   // 3D生成
   threed_character_four_views: 8.0,

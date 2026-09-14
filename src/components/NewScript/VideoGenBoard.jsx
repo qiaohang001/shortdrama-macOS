@@ -11,25 +11,24 @@ const VIDEO_MODES = [
   { key: "s2v", label: "人物+场景参考", desc: "人物+场景参考图驱动，不依赖首帧，人物外貌与场景一致" },
   { key: "r2v", label: "首尾帧 (R2V)", desc: "首帧+尾帧精确控制画面起止，轻量图生视频工作流" },
   { key: "ia2v", label: "全能参考 (Ref2VA)", desc: "参考图片+参考音频+文本，最多9图3音，多模态参考工作流" },
+  { key: "lipsync", label: "对口型 (LipSync)", desc: "人物图+配音音频，AI对口型生成" },
   { key: "t2v", label: "文生视频 (T2V)", desc: "纯文字描述生成，自由度最高" },
 ];
 
-// 各渠道支持的生成模式（万相不支持尾帧R2V，可灵不支持参考音频全能参考）
+// 各渠道支持的生成模式（标准生成=实例面板工作流；高级生成=自部署 MiniMax H3 锁脸链路）
 const PROV_MODES = {
-  autodl: ["i2v", "r2v", "ia2v", "t2v"],
+  autodl: ["i2v", "r2v", "ia2v", "lipsync", "t2v"],
   wan22: ["i2v", "s2v"],
-  kling: ["i2v", "s2v"],
 };
 const getVideoModes = (provider) => {
   const keys = PROV_MODES[provider] || PROV_MODES.autodl;
   return VIDEO_MODES.filter(m => keys.includes(m.key));
 };
 
-// 视频生成渠道（provider）：AutoDL托管 / 自部署MiniMax H3高级 / 百炼可灵3.0顶级
+// 视频生成渠道（provider）：标准生成=实例面板工作流 / 高级生成=自部署MiniMax H3锁脸
 const VIDEO_PROVIDERS = [
-  { key: "autodl", label: "标准生成", desc: "低配托管，1-3积分/秒" },
+  { key: "autodl", label: "标准生成", desc: "实例面板工作流，1-3积分/秒" },
   { key: "wan22", label: "高级生成", desc: "自部署 MiniMax H3，720P=5/1080P=6积分/秒" },
-  { key: "kling", label: "顶级生成", desc: "旗舰高动态画质，5-9积分/秒" },
 ];
 
 // 视频生成价格：从调度机全局价格配置获取
@@ -60,7 +59,7 @@ const RESOLUTIONS_BASIC = [
   { key: "480p竖", label: "480P 竖屏（9:16）" },
 ];
 
-// 根据模式获取可用分辨率（万相/可灵渠道不支持480P，自动隐藏）
+// 根据模式获取可用分辨率（自动隐藏不支持的档位）
 // wan22（自部署 MiniMax H3）：H3 原生 720p/1080p 档位 + 576p 兼容
 const RESOLUTIONS_WAN22 = [
   { key: "1080p横", label: "1080P 横屏（16:9）" },
@@ -74,23 +73,20 @@ const getResolutions = (mode, provider) => {
   if (provider === "wan22") return RESOLUTIONS_WAN22;
   let list;
   if (mode === "i2v" || mode === "s2v") list = RESOLUTIONS_I2V;
-  else if (mode === "ia2v") list = RESOLUTIONS_IA2V;
+  else if (mode === "ia2v" || mode === "lipsync") list = RESOLUTIONS_IA2V;
   else list = RESOLUTIONS_BASIC;
-  if (provider === "kling") {
-    list = list.filter(r => !r.key.includes("480"));
-  }
   return list;
 };
 
-// 根据模式获取可用时长（I2V/S2V/IA2V=1-10秒，R2V/T2V=1-15秒；高级生成MiniMax H3的I2V支持30/60秒长视频分段续接）
+// 根据模式获取可用时长（I2V/S2V/IA2V/LipSync=1-10秒，R2V/T2V=1-15秒；高级生成MiniMax H3的I2V/S2V支持30/60秒长视频分段续接）
 const getDurations = (mode, provider, resolution) => {
   const is1080 = (resolution || "").includes("1080");
   // 1080p 只支持 5 秒以内（实测 1080p 每步约 180s，超过 5 秒耗时不可接受）
   if (provider === "wan22" && is1080) {
     return DURATIONS.filter(d => d.key <= 5);
   }
-  let list = DURATIONS.filter(d => d.key <= (mode === "i2v" || mode === "ia2v" || mode === "s2v" ? 10 : 15));
-  if (provider === "wan22" && mode === "i2v") {
+  let list = DURATIONS.filter(d => d.key <= (mode === "i2v" || mode === "ia2v" || mode === "s2v" || mode === "lipsync" ? 10 : 15));
+  if (provider === "wan22" && (mode === "i2v" || mode === "s2v")) {
     list = list.concat([
       { key: 30, label: "30秒（长视频）" },
       { key: 60, label: "60秒（长视频）" },
@@ -101,7 +97,7 @@ const getDurations = (mode, provider, resolution) => {
 
 // 根据模式获取最大时长
 const getMaxDuration = (mode) => {
-  return (mode === "i2v" || mode === "ia2v" || mode === "s2v") ? 10 : 15;
+  return (mode === "i2v" || mode === "ia2v" || mode === "s2v" || mode === "lipsync") ? 10 : 15;
 };
 
 const DURATIONS = [
@@ -122,12 +118,13 @@ const DURATIONS = [
   { key: 15, label: "15秒" },
 ];
 
-const I2V_WORKFLOW_ID = "minimax_h3_lightx2v_v5";
-const R2V_WORKFLOW_ID = "minimax_h3_lightx2v";
-const IA2V_WORKFLOW_ID = "minimax_h3_image_audio_to_video_v2";
-const T2V_WORKFLOW_ID = "minimax_h3_lightx2v_no_pic";
-const WAN22_WORKFLOW_ID = "minimax_h3_a14b"; // 自部署 MiniMax H3（原 wan22 渠道名保留，变量名兼容不动）
-const KLING_WORKFLOW_ID = "kling_v3_omni"; // 阿里云百炼可灵 v3-omni
+// 实例面板工作流（标准生成 autodl 渠道）：MiniMax H3 系列 / Wan2.2 首尾帧
+const I2V_WORKFLOW_ID = "API-U01-minimax_h3_基础版API"; // 图生视频（人物/场景参考图，锁脸）
+const R2V_WORKFLOW_ID = "API-G02-首尾帧-Wan2.2首尾帧视频"; // 首尾帧（Wan2.2）
+const IA2V_WORKFLOW_ID = "API-U06-9图3音频-V5"; // 全能参考（最多9图3音，Ref2VA）
+const LIPSYNC_WORKFLOW_ID = "API-U11-Minimax-图片音频对口型API"; // 对口型
+const T2V_WORKFLOW_ID = "API-U03-minimax_h3_light2v-文生视频加速版API-V2"; // 文生视频加速版
+const WAN22_WORKFLOW_ID = "minimax_h3_a14b"; // 自部署 MiniMax H3（高级生成锁脸链路，保留不动）
 
 // 视频风格选项
 const VIDEO_STYLES = [
@@ -663,7 +660,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       const recommendedLight = recommendLighting(desc, sh.title || "", dialogue);
       const shotLibText = SHOT_LANGUAGE_TEXT;
       const fxHighText = SHOT_FX_HIGH;
-
+      
       // ── 方案B：组装本次任务的补充规则（保留项目特有的空镜/尸体/Subject分配/光影/镜头类型/画质约束）──
       const shotLibRule = shotDuration >= 8
         ? "本分镜时长≥8秒：至少使用 2 个不同的镜头语言（不同景别或不同运镜），禁止全程固定镜头，除非分镜明确要求监控/客观静止视角"
@@ -1128,7 +1125,9 @@ ${shotTexts}`;
       // AutoDL ComfyUI工作流参数
       const workflowParams = {
         prompt: videoPrompt,
-        duration: Math.min(10, shotDuration),
+        duration: (videoProvider === "wan22" && (selectedMode === "i2v" || selectedMode === "s2v") && duration >= 30)
+          ? duration
+          : Math.min(10, shotDuration),
         resolution: resolution,
         ...(h3Payload ? { h3_prompt: h3Payload } : {}),
       };
@@ -1137,7 +1136,7 @@ ${shotTexts}`;
       let hasFirstFrame = false;
 
       if (selectedMode === "i2v" || selectedMode === "s2v") {
-        // 图生视频（minimax_h3_lightx2v_v5 / wan22/kling 人物参考）：使用人物+场景参考图；s2v=人物+场景参考，i2v+prem=首帧+人物+场景
+        // 图生视频（API-U01 / wan22 人物参考）：使用人物+场景参考图；s2v=人物+场景参考，i2v+prem=首帧+人物+场景
         const charImages = getShotCharacterImages(sh);
         const selChars = characters.filter(c => (sh.selectedCharIds || []).includes(c.id) && (c.fourView || c.image));
         const subjectNames = selChars.map(c => c.name || "").filter(Boolean);
@@ -1191,7 +1190,7 @@ ${shotTexts}`;
           log(`角色外观描述绑定：${subjectDescs.length}个角色，首角色描述：${subjectDescs[0].substring(0, 60)}…`);
         }
 
-        if (videoProvider === "wan22" || videoProvider === "kling") {
+        if (videoProvider === "wan22") {
           if (selectedMode === "s2v") {
             // 人物+场景参考模式：不依赖首帧，直接用人物+场景参考图
             log(`参考图：人物${charCount}张${charCount > 0 ? `（ref_image_0-ref_image_${charCount - 1}）` : ""}，人物+场景参考模式，不使用首帧`);
@@ -1400,83 +1399,106 @@ ${shotTexts}`;
 
         // 5. duration 已经在 workflowParams 中设置了（1-10秒）
         log(`全能参考（Ref2VA v2）：参考图${refImgIdx}张 + 参考音频${audioIdx}个 + 时长${workflowParams.duration}秒`);
+      } else if (selectedMode === "lipsync") {
+        // 对口型（minimax_h3_image_audio_to_video 对口型工作流）：人物图 + 配音音频 → AI对口型视频
+        // 1. 人物参考图（必填，取第一张）
+        const charImages = getShotCharacterImages(sh);
+        let lipCharUrl = null;
+        if (charImages.length > 0) {
+          log(`找到${charImages.length}张角色图，上传第1张用于对口型…`);
+          lipCharUrl = await uploadImageToServer(charImages[0], log);
+          if (lipCharUrl) {
+            workflowParams.ref_image_0 = lipCharUrl;
+            log(`对口型人物图上传成功，ref_image_0 = ${lipCharUrl.substring(0, 80)}...`);
+          } else {
+            throw new Error("对口型人物图上传失败，请检查人物参考图是否有效。");
+          }
+        } else {
+          throw new Error("对口型模式必须绑定至少一张人物图（选择分镜人物或上传参考图）。");
+        }
+
+        // 2. 配音音频（必填）
+        const lipAudio = (refAudioUrls[0] || "").trim();
+        if (!lipAudio || !lipAudio.startsWith("http")) {
+          throw new Error("对口型模式必须提供配音音频（请在音频素材中选择或填写音频URL）。");
+        }
+        workflowParams.ref_audio_0 = lipAudio;
+        log(`对口型音频绑定：${lipAudio.substring(0, 80)}...`);
+
+        // 3. 提示词：优先细化后的 summary（对口型动作描述），回退原始分镜
+        const lipPrompt = (h3Payload && h3Payload.summary) ? h3Payload.summary : videoPrompt;
+        workflowParams.prompt = lipPrompt;
+        log(`对口型提示词：${lipPrompt.substring(0, 80)}...`);
+
+        // 4. 随机种子
+        const lipSeed = Math.floor(Math.random() * 2147483647);
+        workflowParams.seed = lipSeed;
+        log(`随机种子：${lipSeed}`);
+        log(`对口型（LipSync）：人物图1张 + 音频1个 + 时长${workflowParams.duration}秒`);
       }
       // t2v：不传参考图
 
-      // 根据模式选择不同的工作流ID
+      // 根据模式选择不同的工作流ID（标准生成=实例面板工作流，高级生成=自部署 MiniMax H3 锁脸链路）
       let currentWorkflowId;
       if (videoProvider === "wan22") {
-        currentWorkflowId = selectedMode === "s2v" ? WAN22_WORKFLOW_ID + "_s2v" : WAN22_WORKFLOW_ID + "_i2v"; // 自部署 MiniMax H3
-      } else if (videoProvider === "kling") {
-        currentWorkflowId = KLING_WORKFLOW_ID; // 可灵 v3-omni
+        currentWorkflowId = selectedMode === "s2v" ? WAN22_WORKFLOW_ID + "_s2v" : WAN22_WORKFLOW_ID + "_i2v"; // 自部署 MiniMax H3（保留不动）
       } else if (selectedMode === "i2v" || selectedMode === "s2v") {
-        currentWorkflowId = I2V_WORKFLOW_ID; // minimax_h3_lightx2v_v5
+        currentWorkflowId = I2V_WORKFLOW_ID; // API-U01 minimax_h3 基础版（人物/场景参考图锁脸）
       } else if (selectedMode === "r2v") {
-        currentWorkflowId = R2V_WORKFLOW_ID; // minimax_h3_lightx2v
+        currentWorkflowId = R2V_WORKFLOW_ID; // API-G02 Wan2.2 首尾帧
       } else if (selectedMode === "ia2v") {
-        currentWorkflowId = IA2V_WORKFLOW_ID; // minimax_h3_image_audio_to_video
+        currentWorkflowId = IA2V_WORKFLOW_ID; // API-U06 9图3音频
+      } else if (selectedMode === "lipsync") {
+        currentWorkflowId = LIPSYNC_WORKFLOW_ID; // API-U11 图片音频对口型
       } else {
-        currentWorkflowId = T2V_WORKFLOW_ID; // minimax_h3_lightx2v_no_pic
+        currentWorkflowId = T2V_WORKFLOW_ID; // API-U03 文生视频加速版
       }
 
-      // 根据模式限制duration（I2V=1-10秒，R2V/T2V=1-15秒）
-      const maxDuration = getMaxDuration(selectedMode);
-      workflowParams.duration = Math.min(maxDuration, Math.max(1, workflowParams.duration));
+      // 根据模式限制duration（I2V=1-10秒，R2V/T2V=1-15秒）；长视频（30/60秒潜空间接力）不限制
+      if (!(videoProvider === "wan22" && (selectedMode === "i2v" || selectedMode === "s2v") && duration >= 30)) {
+        const maxDuration = getMaxDuration(selectedMode);
+        workflowParams.duration = Math.min(maxDuration, Math.max(1, workflowParams.duration));
+      }
 
       // ===== 长视频（高级生成·分段续接）：30/60 秒，每 10 秒一段，段间尾帧衔接 =====
-      const isLongVideo = (videoProvider === "wan22" && selectedMode === "i2v" && duration >= 30);
+      const isLongVideo = (videoProvider === "wan22" && (selectedMode === "i2v" || selectedMode === "s2v") && duration >= 30);
       let res;
       if (isLongVideo) {
+        // U02 潜空间接力（EndlessH3）：分镜切成 10s 段，段间 latent 接力 + 参考图锁脸，实例端无缝合成
         const SEG_SEC = 10;
         const totalSegs = Math.round(duration / SEG_SEC);
-        const segUrls = [];
-        log(`🎬 长视频模式：${totalSegs} 段 × ${SEG_SEC} 秒 = ${totalSegs * SEG_SEC} 秒，分段续接生成（每段首帧自动衔接上一段尾帧）`);
-        for (let segIdx = 1; segIdx <= totalSegs; segIdx++) {
+        const shots = [];
+        for (let i = 0; i < totalSegs; i++) {
           const segParams = { ...workflowParams, duration: SEG_SEC };
-          if (segIdx > 1) {
-            log(`长视频第 ${segIdx}/${totalSegs} 段：提取上一段尾帧…`);
-            const tailRes = await extractTail(segUrls[segUrls.length - 1]);
-            const tailUrl = tailRes && tailRes.frame_url;
-            if (!tailUrl) {
-              throw new Error(`长视频第 ${segIdx} 段尾帧提取失败，已中止（前 ${segIdx - 1} 段已生成并扣费，未拼接）`);
-            }
-            segParams.first_frame = tailUrl;
-            log(`长视频第 ${segIdx}/${totalSegs} 段：尾帧→首帧衔接成功`);
+          delete segParams.first_frame; // 潜空间接力不需要首帧（latent 直接续接）
+          delete segParams.h3_prompt;   // U02 用 prompt 字段拼 H3 结构化（调度机按 subject_names 重建锁脸定义）
+          shots.push(segParams);
+        }
+        log(`🎬 长视频模式（U02 潜空间接力）：${totalSegs} 段 × ${SEG_SEC} 秒 = ${totalSegs * SEG_SEC} 秒，参考图全程锁脸`);
+        const shotsRes = await runDispatchJob({
+          type: "video_shots",
+          payload: {
+            shots,
+            resolution,
+            provider: videoProvider,
+            total_duration: duration, // 计费用（pricing video_shots 按总秒数）
+          },
+          pollInterval: 5000,
+          timeoutMs: 7200000,
+          onProgress: (progress, text, info) => {
+            setGenProgress(prev => ({ ...prev, [sh.id]: { text: `长视频 · ${text}`, ...info } }));
           }
-          log(`长视频第 ${segIdx}/${totalSegs} 段：提交生成（${SEG_SEC}秒）…`);
-          const segRes = await runDispatchJob({
-            type: "video",
-            payload: {
-              workflow: currentWorkflowId,
-              model: videoProvider === "wan22" ? "MiniMax-H3-A14B" : (videoProvider === "kling" ? "Kling-v3-omni" : "MiniMax-H3"),
-              mode: selectedMode,
-              provider: videoProvider,
-              ...segParams,
-            },
-            pollInterval: 5000,
-            timeoutMs: 7200000,
-            onProgress: (progress, text, info) => {
-              setGenProgress(prev => ({ ...prev, [sh.id]: { text: `长视频 ${segIdx}/${totalSegs} · ${text}`, ...info } }));
-            }
-          });
-          segUrls.push(segRes.resultUrl);
-          log(`长视频第 ${segIdx}/${totalSegs} 段完成 ✅（${segRes.resultUrl.substring(0, 80)}…）`);
-        }
-        log("长视频全部段落生成完成，拼接合成中…");
-        const joined = await concatVideos(segUrls);
-        if (!joined || !joined.video_url) {
-          throw new Error(`长视频拼接失败（${totalSegs} 段均已生成并扣费）`);
-        }
-        res = { resultUrl: joined.video_url };
-        log(`✅ 长视频拼接完成：${totalSegs * SEG_SEC} 秒`);
-      } else {
+        });
+        res = { resultUrl: shotsRes.resultUrl };
+        log(`✅ 长视频生成完成：${totalSegs * SEG_SEC} 秒（${shotsRes.resultUrl.substring(0, 80)}…）`);
+            } else {
         log(`提交视频生成任务，工作流：${currentWorkflowId}，模式：${selectedMode}`);
 
         res = await runDispatchJob({
           type: "video",
           payload: {
             workflow: currentWorkflowId,
-            model: videoProvider === "wan22" ? "MiniMax-H3-A14B" : (videoProvider === "kling" ? "Kling-v3-omni" : "MiniMax-H3"),
+            model: videoProvider === "wan22" ? "MiniMax-H3-A14B" : "MiniMax-H3",
             mode: selectedMode,
             provider: videoProvider,
             ...workflowParams,
@@ -1737,7 +1759,7 @@ ${shotTexts}`;
   // 视频价格：按模式+分辨率分别定价
   const pricePerSec = getVideoPricePerSec(selectedMode, resolution, videoProvider);
   const currentCredits = pricePerSec * duration;
-  const isPremProvider = videoProvider === "wan22" || videoProvider === "kling";
+  const isPremProvider = videoProvider === "wan22";
   const showFirstFramePanel = selectedMode === "r2v" || (isPremProvider && selectedMode === "i2v");
   const showLastFrame = selectedMode === "r2v";
 
@@ -2159,16 +2181,17 @@ ${shotTexts}`;
         </div>
       )}
 
-      {/* 全能参考(Ref2VA/v2)设置 */}
-      {selectedMode === "ia2v" && (
+      {/* 全能参考(Ref2VA/v2) / 对口型(LipSync)设置 */}
+      {(selectedMode === "ia2v" || selectedMode === "lipsync") && (
         <div style={{ marginBottom: 16, padding: 12, border: "1px solid var(--border)", borderRadius: 8, background: "var(--panel-2)" }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>🎛️ 全能参考设置（Ref2VA v2，所有参数选填，最多9图+3音）</span>
+            <span>{selectedMode === "lipsync" ? "🎙️ 对口型设置（人物图 + 配音音频必填）" : "🎛️ 全能参考设置（Ref2VA v2，所有参数选填，最多9图+3音）"}</span>
             <span style={{ fontSize: 11, color: "#7A5CFF", fontWeight: 500 }}>
               当前分镜：{shots.find(s => s.id === selectedShotId)?.title || "请点击下方分镜卡片选择"}
             </span>
           </div>
           {/* 参考图片 */}
+          {selectedMode === "ia2v" && (
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
               🖼️ 参考图片（选填，不填则自动使用角色参考图）
@@ -2202,10 +2225,16 @@ ${shotTexts}`;
               {refImageUrl ? "✓ 使用手动上传的参考图片" : "ℹ️ 将自动使用人物管理中的角色参考图（最多9张）"}
             </div>
           </div>
-          {/* 参考音频（最多3个） */}
+          )}
+          {selectedMode === "lipsync" && (
+            <div style={{ marginBottom: 10, fontSize: 11, color: "var(--text-muted)" }}>
+              🖼️ 人物图：自动使用分镜人物的第1张角色图（四视图优先），无需手动上传。
+            </div>
+          )}
+          {/* 参考音频 */}
           <div>
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>🎵 参考音频 URL（选填，最多3个，支持 MP3/WAV/MP4/FLAC）</span>
+              <span>{selectedMode === "lipsync" ? "🎵 配音音频（必填，1个，支持 MP3/WAV/MP4/FLAC）" : "🎵 参考音频 URL（选填，最多3个，支持 MP3/WAV/MP4/FLAC）"}</span>
               <button onClick={() => {
                 // 前往生成本镜音频：触发父组件切换到配音模块
                 if (window.switchToDubbing) {
@@ -2217,11 +2246,11 @@ ${shotTexts}`;
                 🎙️ 前往生成本镜音频
               </button>
             </div>
-            {[0, 1, 2].map(idx => (
+            {(selectedMode === "lipsync" ? [0] : [0, 1, 2]).map(idx => (
               <div key={idx} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 10, color: "var(--text-muted)", minWidth: 42 }}>音频 {idx + 1}</span>
-                <input style={{ flex: 1, minWidth: 150, padding: "5px 8px", border: "1px solid var(--border)", borderRadius: 4, background: "var(--input-bg)", color: "var(--text)", fontSize: 11 }}
-                  placeholder={`https://example.com/audio${idx + 1}.mp3`}
+                <input style={{ flex: 1, minWidth: 150, padding: "5px 8px", border: selectedMode === "lipsync" && !refAudioUrls[0]?.trim() ? "1px solid #ef4444" : "1px solid var(--border)", borderRadius: 4, background: "var(--input-bg)", color: "var(--text)", fontSize: 11 }}
+                  placeholder={selectedMode === "lipsync" ? "https://example.com/audio.mp3（必填）" : `https://example.com/audio${idx + 1}.mp3`}
                   value={refAudioUrls[idx] || ""}
                   onChange={e => {
                     const newUrls = [...refAudioUrls];
@@ -2298,10 +2327,10 @@ ${shotTexts}`;
                 }} style={{ padding: "4px 8px", border: "1px solid #ef4444", borderRadius: 4, background: "transparent", color: "#ef4444", cursor: "pointer", fontSize: 10 }}>清除</button>}
               </div>
             ))}
-            <div style={{ fontSize: 10, color: refAudioUrls.filter(u => u?.trim()).length > 0 ? "#10b981" : "var(--text-muted)", marginTop: 3 }}>
+            <div style={{ fontSize: 10, color: refAudioUrls.filter(u => u?.trim()).length > 0 ? "#10b981" : (selectedMode === "lipsync" ? "#ef4444" : "var(--text-muted)"), marginTop: 3 }}>
               {refAudioUrls.filter(u => u?.trim()).length > 0
                 ? `✓ 已填写 ${refAudioUrls.filter(u => u?.trim()).length} 个参考音频`
-                : "ℹ️ 未填写参考音频，将不使用音频参考（纯图/文生成）"}
+                : (selectedMode === "lipsync" ? "⚠️ 配音音频为必填项，未填写无法生成对口型视频" : "ℹ️ 未填写参考音频，将不使用音频参考（纯图/文生成）")}
             </div>
           </div>
         </div>
@@ -2318,8 +2347,8 @@ ${shotTexts}`;
                 &nbsp;&nbsp;3. 首帧来源可选：本分镜分镜图 / 上个视频尾帧 / 手动上传<br/>
                 &nbsp;&nbsp;4. 支持1080P/1:1分辨率，时长1-10秒</>
             ) : (
-              <>✓ i2v模式（minimax_h3_lightx2v_v5）：<br/>
-                &nbsp;&nbsp;1. 人物参考图 = 人物管理中已生成的角色图（保证人物一致，ref_image_0必填）<br/>
+              <>✓ i2v模式（API-U01 图生视频）：<br/>
+                &nbsp;&nbsp;1. 人物参考图 = 人物管理中已生成的角色图（保证人物一致，四视图优先）<br/>
                 &nbsp;&nbsp;2. 支持1080P和1:1方形分辨率，最多9张参考图，时长1-10秒<br/>
                 &nbsp;&nbsp;3. 不使用首帧（纯人物参考图生成）</>
             )}
@@ -2331,7 +2360,7 @@ ${shotTexts}`;
       {selectedMode === "t2v" && (
         <div style={{ marginBottom: 16, padding: "10px 14px", border: "1px solid rgba(122,92,255,0.3)", borderRadius: 8, background: "rgba(122,92,255,0.08)" }}>
           <div style={{ fontSize: 11, color: "#7A5CFF", lineHeight: 1.6 }}>
-            ✓ t2v模式（minimax_h3_lightx2v_no_pic）：<br/>
+            ✓ t2v模式（API-U03 文生视频加速版）：<br/>
             &nbsp;&nbsp;1. 纯文字描述生成，自由度最高，不需要参考图<br/>
             &nbsp;&nbsp;2. 支持480P/768P竖屏/横屏，时长1-15秒<br/>
             &nbsp;&nbsp;3. 不支持1080P分辨率
