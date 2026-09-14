@@ -69,9 +69,17 @@ async fn download_url(url: String, filename: String) -> Result<String, String> {
 
 /// 桌面端：把短剧素材库生成的角色/场景 3D 模型元数据写入共享目录，
 /// 供 3D 导演台（独立 exe）启动后自动载入。文件位于 D:/JINSU/jinsu-shared-assets.json。
+/// Android：写入应用数据目录（app_data_dir），无 D:/ 路径。
 #[tauri::command]
-fn save_shared_assets(contents: String) -> Result<String, String> {
-    let path = std::path::PathBuf::from("D:/JINSU/jinsu-shared-assets.json");
+fn save_shared_assets(app: tauri::AppHandle, contents: String) -> Result<String, String> {
+    let path = if cfg!(target_os = "android") {
+        app.path()
+            .app_data_dir()
+            .map_err(|e| format!("获取应用数据目录失败: {e}"))?
+            .join("jinsu-shared-assets.json")
+    } else {
+        std::path::PathBuf::from("D:/JINSU/jinsu-shared-assets.json")
+    };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }

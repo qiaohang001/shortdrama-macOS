@@ -291,6 +291,12 @@ export function downloadBlob(filename, blob) {
 // ── Tauri 桌面端保存文件（Rust save_file command，默认保存到系统「下载」目录）──
 // 浏览器环境回退为 <a download>。所有下载/导出统一走这里。
 export async function saveBlob(filename, blob) {
+  // Android：无系统「下载」对话框，本地 blob 转 ObjectURL 触发 WebView 下载
+  const isAndroidApp = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent) && typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (isAndroidApp) {
+    downloadBlob(filename, blob);
+    return { ok: true, path: "" };
+  }
   // Tauri 2 环境检测：标准内部标志 __TAURI_INTERNALS__（比 window.__TAURI__ 更可靠，不依赖 withGlobalTauri）
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   if (isTauri) {
@@ -317,6 +323,19 @@ export async function saveBlob(filename, blob) {
 
 // 下载远程资源（成片导出）
 export async function downloadUrl(url, filename) {
+  // Android：直接交给系统浏览器打开（COS 永久 URL），用户可预览/保存/分享
+  const isAndroidApp = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent) && typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (isAndroidApp) {
+    try {
+      const { openUrl } = await import("@tauri-apps/plugin-shell");
+      await openUrl(url);
+      return true;
+    } catch (e) {
+      console.warn("Android openUrl 失败，回退 window.open:", e);
+      window.open(url, "_blank");
+      return true;
+    }
+  }
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   if (isTauri) {
     try {

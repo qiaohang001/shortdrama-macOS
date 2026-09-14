@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { IS_ANDROID } from "../../lib/platform.js";
 
 // ========== 常量配置 ==========
 const PIXELS_PER_SECOND = 50;
@@ -1107,6 +1108,38 @@ export function EditExport({ project, update, log, incomingAssets = [], onConsum
       }));
 
       log?.(`正在合成 ${clips.length} 段视频 + ${audios.length} 段音频…`);
+      // Android：无本地 ffmpeg，合并/合成走调度机服务端（扣积分），返回 COS 永久 URL 后交给系统浏览器保存/分享
+      if (IS_ANDROID) {
+        const base = (localStorage.getItem("DISPATCH_BASE_URL") || "https://api.jinsuai.cn").replace(/\/$/, "");
+        const tk = localStorage.getItem("DISPATCH_TOKEN") || "";
+        const r = await fetch(base + "/api/video/merge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(tk ? { Authorization: "Bearer " + tk } : {}) },
+          body: JSON.stringify({
+            mode: "timeline",
+            timeline: {
+              clips, audios, texts,
+              width: ratio?.w || 1920,
+              height: ratio?.h || 1080,
+              fps: exportFps || 30,
+              bitrate: exportBitrate || "8M",
+              bg_color: bgColor || "#000000",
+            },
+            filename: `烬序成片_${Date.now()}.mp4`,
+          }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          const msg = data.detail || data.message || `导出失败 HTTP ${r.status}`;
+          throw new Error(r.status === 402 ? "余额不足，请先充值" : msg);
+        }
+        log?.(`✅ 导出成功：${data.url}`);
+        const { openUrl } = await import("@tauri-apps/plugin-shell");
+        await openUrl(data.url);
+        setBusy("");
+        setShowExportSettings(false);
+        return;
+      }
       const path = await invoke("export_timeline", {
         clips, audios, texts,
         width: ratio?.w || 1920,
