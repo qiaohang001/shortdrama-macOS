@@ -1,0 +1,87 @@
+name: Build Android (烬序影墟)
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust (with Android targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # 删除旧 lock，用 npm install 按 file: 引用解析本地包
+      - name: Install frontend dependencies
+        run: |
+          rm -f package-lock.json
+          npm install
+
+      - name: Build frontend (dist)
+        run: npm run build
+
+      # Android 无本地 ffmpeg：剥离 bundle.resources 里的 ffmpeg.exe 引用，
+      # 否则打包会因资源缺失失败（合并/导出已服务端化）
+      - name: Strip desktop-only resources for Android
+        run: |
+          python3 - <<'EOF'
+          import json, io
+          p = 'src-tauri/tauri.conf.json'
+          with io.open(p, encoding='utf-8') as f:
+              cfg = json.load(f)
+          res = cfg.get('bundle', {}).get('resources', {})
+          if isinstance(res, dict):
+              res.pop('resources/ffmpeg.exe', None)
+              cfg['bundle']['resources'] = res
+          elif isinstance(res, list):
+              cfg['bundle']['resources'] = [x for x in res if 'ffmpeg' not in str(x)]
+          with io.open(p, 'w', encoding='utf-8') as f:
+              json.dump(cfg, f, ensure_ascii=False, indent=2)
+          print('patched resources ->', json.dumps(cfg['bundle']['resources'], ensure_ascii=False))
+          EOF
+
+      - name: Ensure icons
+        run: |
+          SRC=""
+          for c in src-tauri/icons/app-icon.png src-tauri/icons/512x512.png src-tauri/icons/128x128.png src-tauri/icons/icon.png; do
+            [ -f "$c" ] && SRC="$c" && break
+          done
+          if [ -z "$SRC" ]; then
+            echo "::error::未找到图标源图，请确认 src-tauri/icons/ 目录下存在 png 图标"
+            exit 1
+          fi
+          npx @tauri-apps/cli icon "$SRC" --output src-tauri/icons
+
+      # 本机无 Android SDK，工程由 CI 幂等生成（runner 自带 JDK17 + Android SDK + NDK）
+      - name: Init Android project
+        run: npx tauri android init
+
+      - name: Build Android APK
+        uses: tauri-apps/tauri-action@v0
+        with:
+          args: --target android --bundles apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 烬序影墟-android-apk
+          path: |
+            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
