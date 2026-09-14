@@ -722,13 +722,18 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
     }
   };
 
-  // 获取分镜涉及的角色图片（优先使用用户手动选择的角色）
+  // 获取分镜涉及的角色图片（优先使用用户手动选择的角色，优先传四视图）
   const getShotCharacterImages = (sh) => {
     // 仅使用用户手动选择的角色图；未选择则返回空（空镜/无人物分镜不传人物参考图，不自动绑定）
+    // 人物锁定优先传四视图（多视角锁定更强）；未生成四视图时回退单张参考图
     if (sh.selectedCharIds && sh.selectedCharIds.length > 0) {
-      const selectedChars = characters.filter(c => c.image && sh.selectedCharIds.includes(c.id));
+      const selectedChars = characters.filter(c => sh.selectedCharIds.includes(c.id));
       if (selectedChars.length > 0) {
-        return selectedChars.map(c => c.image).filter(Boolean);
+        const missingFourView = selectedChars.filter(c => !c.fourView && c.image);
+        if (missingFourView.length > 0) {
+          log(`⚠️ ${missingFourView.map(c => c.name).join("、")} 未生成四视图，暂用人物参考图（建议先生成四视图，锁定效果更强）`);
+        }
+        return selectedChars.map(c => c.fourView || c.image).filter(Boolean);
       }
     }
     return [];
@@ -1134,9 +1139,10 @@ ${shotTexts}`;
       if (selectedMode === "i2v" || selectedMode === "s2v") {
         // 图生视频（minimax_h3_lightx2v_v5 / wan22/kling 人物参考）：使用人物+场景参考图；s2v=人物+场景参考，i2v+prem=首帧+人物+场景
         const charImages = getShotCharacterImages(sh);
-        const subjectNames = characters.filter(c => charImages.includes(c.image)).map(c => c.name || "").filter(Boolean);
+        const selChars = characters.filter(c => (sh.selectedCharIds || []).includes(c.id) && (c.fourView || c.image));
+        const subjectNames = selChars.map(c => c.name || "").filter(Boolean);
         // 角色外观描述（与 ref_image 人物图顺序一一对应）：H3 锁人物需要「文字外观 + <Picture N> 图片引用」双重锚定
-        const subjectDescs = characters.filter(c => charImages.includes(c.image)).map(c => extractAppearance(c) || "").filter(Boolean);
+        const subjectDescs = selChars.map(c => extractAppearance(c) || "").filter(Boolean);
         let refIdx = 0;
         if (charImages.length === 0) {
           log("ℹ️ 本分镜未绑定人物图，按无人物参考生成（仅场景参考图 + 提示词）");
@@ -1647,7 +1653,7 @@ ${shotTexts}`;
         sceneRefs.forEach((u, i) => { shotItem[`ref_image_${subjectRefs.length + i}`] = u; });
         // 多角色锁脸：subject_names 传全部分镜绑定角色名（调度机据此切分人物/场景并生成锁脸定义）
         const shotCharNames = (sh.characters || [])
-          .filter(c => charImages.includes(c.image))
+          .filter(c => charImages.includes(c.fourView) || charImages.includes(c.image))
           .map(c => c.name || "").filter(Boolean);
         if (shotCharNames.length > 0) shotItem.subject_names = shotCharNames;
         shots.push(shotItem);
