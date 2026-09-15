@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --port 4174 --host"
+    "preview": "vite preview --port 4174 --host",
+    "tauri": "tauri"
   },
   "dependencies": {
     "@dual/agnes-client": "file:local-packages/agnes-client",
@@ -26,6 +27,7 @@
     "zustand": "^4.5.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@vitejs/plugin-react": "^4.3.1",
     "sass-embedded": "^1.77.0",
     "typescript": "^5.4.0",
