@@ -82,12 +82,10 @@ jobs:
           echo "AR_aarch64_linux_android=$LLVM/llvm-ar" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$LLVM/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
 
-      # 用 tauri android build（gradle 链路）而非 tauri build --target：
-      # tauri android 会自行配置 NDK/链接器，避免 ring 等 C 依赖找不到 android clang
+      # tauri android build（gradle 链路）：tauri CLI 会自行配置 NDK/链接器，
+      # 避免 ring 等 C 依赖找不到 android clang。不能用 tauri-action（它只支持 tauri build 参数）
       - name: Build Android APK
-        uses: tauri-apps/tauri-action@v0
-        with:
-          args: android build
+        run: npx --yes @tauri-apps/cli@2 android build
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
