@@ -87,6 +87,27 @@ jobs:
       - name: Build Android APK
         run: npx --yes @tauri-apps/cli@2 android build
 
+      # unsigned 的 release APK 无法安装：用标准 debug keystore（storepass=android）签名，
+      # 产出可安装的 app-*-release.apk。正式发布签名后续可换正式 keystore。
+      - name: Sign APK (debug keystore)
+        run: |
+          set -e
+          KEYSTORE=~/.android/debug.keystore
+          mkdir -p ~/.android
+          if [ ! -f "$KEYSTORE" ]; then
+            keytool -genkeypair -v -keystore "$KEYSTORE" -storepass android -alias androiddebugkey \
+              -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort | tail -1)
+          echo "apksigner=$APKSIGNER"
+          find src-tauri/gen/android/app/build/outputs/apk -name "*unsigned*.apk" | while read -r apk; do
+            OUT="${apk/-unsigned/}"
+            "$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass pass:android --key-pass pass:android \
+              --out "$OUT" "$apk"
+            echo "signed -> $OUT"
+          done
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
