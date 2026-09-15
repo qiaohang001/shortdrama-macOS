@@ -5,6 +5,11 @@ description = "AI 视频短剧一站式桌面端"
 authors = ["you"]
 edition = "2021"
 
+# Android 需要 lib target（Java 层经 JNI 调用）；桌面端仍走 binary target
+[lib]
+name = "shortdrama_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
