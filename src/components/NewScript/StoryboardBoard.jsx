@@ -268,6 +268,42 @@ ${context.slice(0, 3000)}
     }
   };
 
+  // 在指定分镜之后插入过渡分镜（支持任意位置插入）
+  const insertShotAfter = (sh) => {
+    const all = shots;
+    const idx = all.findIndex(s => s.id === sh.id);
+    if (idx < 0) { log("⚠️ 未找到目标分镜"); return; }
+    const newShot = {
+      id: "shot_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6),
+      shotIndex: 0,
+      episodeId: sh.episodeId || selectedEp || null,
+      title: "过渡分镜",
+      sceneDesc: "",
+      sceneType: "中景",
+      cameraMove: "固定",
+      lighting: "自然光",
+      emotion: "正常",
+      duration: 5,
+      promptCn: "",
+      characters: sh.characters || [],
+      dialogue: "",
+      subtitle: "",
+      innerMonologue: "",
+      note: "",
+      imageUrl: null,
+      videoUrl: null,
+      status: "pending",
+      progress: 0
+    };
+    const next = [...all];
+    next.splice(idx + 1, 0, newShot);
+    // 按新顺序重排 shotIndex
+    update({ shots: next.map((s, i) => ({ ...s, shotIndex: i + 1 })) });
+    setEditingShotId(newShot.id);
+    setEditContent("");
+    log("✅ 已在「" + sh.title + "」后插入过渡分镜，可直接编辑描述");
+  };
+
   const firstEpId = project?.episodes?.[0]?.id;
   const currentShots = selectedEp
     ? shots.filter(s => {
@@ -402,6 +438,13 @@ ${context.slice(0, 3000)}
                 }}
               >
                 ✏️ 编辑
+              </button>
+              <button
+                style={{ padding: "6px 12px", border: "1px dashed var(--border)", borderRadius: 6, background: "transparent", color: "var(--primary, #7a5cff)", cursor: "pointer", fontSize: 12 }}
+                onClick={() => insertShotAfter(sh)}
+                title="在此分镜后插入一个过渡分镜"
+              >
+                ➕ 插入分镜
               </button>
               <button
                 style={{ padding: "6px 12px", border: "1px solid #ef4444", borderRadius: 6, background: "transparent", color: "#ef4444", cursor: "pointer", fontSize: 12 }}
