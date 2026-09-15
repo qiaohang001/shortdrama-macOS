@@ -67,11 +67,11 @@ jobs:
             echo "::error::未找到图标源图，请确认 src-tauri/icons/ 目录下存在 png 图标"
             exit 1
           fi
-          npx @tauri-apps/cli icon "$SRC" --output src-tauri/icons
+          npx --yes @tauri-apps/cli@2 icon "$SRC" --output src-tauri/icons
 
       # 本机无 Android SDK，工程由 CI 幂等生成（runner 自带 JDK17 + Android SDK + NDK）
       - name: Init Android project
-        run: npx tauri android init
+        run: npx --yes @tauri-apps/cli@2 android init
 
       - name: Build Android APK
         uses: tauri-apps/tauri-action@v0
