@@ -18,8 +18,8 @@ const DEFAULT_PRICING = {
   voice_design_preview_per_10k_chars: 1.0,
   voice_design_first_use: 10.0,
   voice_design_min_charge: 1.0,
-  // LLM文本生成
-  llm_script_analyze: 2.0,
+  // LLM文本生成（与调度机 /api/pricing 的 llm 表一致）
+  llm_script_analyze: 1.0,
   llm_script_quick_create: 3.0,
   llm_script_one_click: 1.0,
   llm_script_detailed: 5.0,
@@ -54,11 +54,25 @@ const DEFAULT_PRICING = {
     autodl: { name: "标准", desc: "MiniMax H3 · 实例面板工作流" },
     wan22:  { name: "高级生成", desc: "MiniMax H3 自部署 · 720P=1.5/1080P=2积分/秒" },
   },
-  // 3D生成
-  threed_character_four_views: 8.0,
-  threed_character_3d_model: 25.0,
+  // 3D生成（对齐调度机 /api/pricing 的 threed 表：混元3D 30/35/40，概念图/四视图 3）
+  threed_character_four_views: 3.0,
+  threed_character_text_to_3d: 30.0,
+  threed_character_image_to_3d: 35.0,
+  threed_character_3d_model: 30.0,
   threed_scene_concept_image: 3.0,
-  threed_scene_3d_model: 25.0,
+  threed_scene_3d_model: 40.0,
+  // 固定价服务（对齐调度机 SERVICE_CREDIT_PRICES：去水印/去字幕/图片处理=1，音色复制=10，音乐=3）
+  watermark: 1.0,
+  subtitle: 1.0,
+  upscale: 1.0,
+  qualityRestore: 1.0,
+  styleTransfer: 1.0,
+  voiceclone: 10.0,
+  music: 3.0,
+  // 视频配套
+  video_refine: 1.0,   // U00 提示词细化（对齐调度机）
+  video_merge: 2.0,    // 服务端 ffmpeg 合并/导出
+  intro: 1.0,
   // 充值套餐
   credit_packages: [
     { name: "体验包", price: 6, credits: 30, bonus: 0, desc: "1:5" },
@@ -67,11 +81,11 @@ const DEFAULT_PRICING = {
     { name: "工作室包", price: 298, credits: 1800, bonus: 300, desc: "1:6" },
     { name: "企业包", price: 698, credits: 4500, bonus: 1000, desc: "1:6.4" },
   ],
-  // 会员套餐
+  // 会员套餐（赠送额度对齐调度机 MEMBERSHIP_TIERS：95/345/1288）
   membership_packages: [
-    { name: "月卡", price: 29, credits: 100, discount: 0.9, discount_label: "9折", duration_days: 30, benefits: "优先队列、去水印" },
-    { name: "季卡", price: 79, credits: 350, discount: 0.85, discount_label: "85折", duration_days: 90, benefits: "月卡全部 + 高清导出" },
-    { name: "年卡", price: 268, credits: 1300, discount: 0.8, discount_label: "8折", duration_days: 365, benefits: "季卡全部 + 专属模型、客服优先" },
+    { name: "月卡", price: 29, credits: 95, discount: 0.9, discount_label: "9折", duration_days: 30, benefits: "优先队列、去水印" },
+    { name: "季卡", price: 79, credits: 345, discount: 0.85, discount_label: "85折", duration_days: 90, benefits: "月卡全部 + 高清导出" },
+    { name: "年卡", price: 268, credits: 1288, discount: 0.8, discount_label: "8折", duration_days: 365, benefits: "季卡全部 + 专属模型、客服优先" },
   ],
   // 汇率
   exchange_rate: 5.0,
@@ -87,14 +101,26 @@ export function getPricing() {
 }
 
 /**
- * 获取单个价格项
- * @param {string} key - 价格项的key
+ * 获取单个价格项（兼容调度机 /api/pricing 返回的两种命名）
+ * 优先级：APP_PRICING 直接命中 → 剥离 llm_/tts_/threed_/video_ 前缀后命中 →
+ *         嵌套分组(llm/tts/image/threed/voice_design)内命中 → DEFAULT_PRICING → 默认值
+ * @param {string} key - 价格项的key（前端习惯带前缀，如 llm_script_analyze）
  * @param {number} defaultValue - 默认值
  * @returns {number} 价格
  */
 export function getPrice(key, defaultValue = 0) {
   const pricing = getPricing();
-  return pricing[key] !== undefined ? pricing[key] : defaultValue;
+  // 1. 直接命中（前端 DEFAULT_PRICING 平铺 key）
+  if (pricing[key] !== undefined) return pricing[key];
+  // 2. 兼容调度机 /api/pricing 命名（无 llm_/tts_/threed_/video_ 前缀）
+  const strip = key.replace(/^(llm_|tts_|threed_|video_)/, "");
+  if (pricing[strip] !== undefined) return pricing[strip];
+  // 3. 兼容调度机嵌套分组：llm: {...} / tts: {...} / image: {...} / threed: {...} / voice_design: {...}
+  for (const group of ["llm", "tts", "image", "threed", "voice_design", "services"]) {
+    const g = pricing[group];
+    if (g && typeof g === "object" && g[strip] !== undefined) return g[strip];
+  }
+  return defaultValue;
 }
 
 /**
@@ -104,10 +130,9 @@ export function getPrice(key, defaultValue = 0) {
  * @returns {number} 价格（积分）
  */
 export function calcTtsPrice(lineCount = 1, model = "hd") {
-  const pricing = getPricing();
-  const perLine = model === "hd" ? (pricing.tts_hd_per_line || 2.0) : (pricing.tts_turbo_per_line || 1.0);
+  const perLine = getPrice(model === "hd" ? "tts_hd_per_line" : "tts_turbo_per_line", 0.5);
   const price = lineCount * perLine;
-  return Math.max(pricing.tts_min_charge || 1.0, price);
+  return Math.max(getPrice("tts_min_charge", 0.5), price);
 }
 
 /**

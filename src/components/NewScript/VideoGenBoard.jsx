@@ -609,12 +609,13 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
       alert("请先登录后再使用AI细化提示词功能");
       return;
     }
-    // 积分预校验（AI细化提示词2积分：U00 Qwen GPU 细化）
+    // 积分预校验（AI细化提示词：U00 Qwen GPU 细化，价格从调度机获取）
     try {
-      const precheck = await precheckCredits(2, "text", "AI细化视频提示词");
+      const refinePrice = getPrice("video_refine", 1.0);
+      const precheck = await precheckCredits(refinePrice, "text", "AI细化视频提示词");
       if (!precheck.sufficient && precheck.sufficient !== undefined) {
-        log(`❌ 积分不足：需要2积分，当前余额${precheck.balance || 0}积分`);
-        alert(`积分不足！AI细化提示词需要2积分，当前余额${precheck.balance || 0}积分。请充值后再试。`);
+        log(`❌ 积分不足：需要${refinePrice}积分，当前余额${precheck.balance || 0}积分`);
+        alert(`积分不足！AI细化提示词需要${refinePrice}积分，当前余额${precheck.balance || 0}积分。请充值后再试。`);
         return;
       }
     } catch (e) {
