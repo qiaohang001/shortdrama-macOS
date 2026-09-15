@@ -32,21 +32,21 @@ const DEFAULT_PRICING = {
   llm_scene_refine: 1.0,
   llm_subtitle_generate: 1.0,
   // 视频生成
-  video_t2v_480p: 0.5,
+  video_t2v_480p: 0.6,
   video_t2v_768p: 0.8,
   video_t2v_1080p: 1.0,
-  video_i2v_480p: 0.5,
+  video_i2v_480p: 0.6,
   video_i2v_768p: 0.8,
   video_i2v_1080p: 1.0,
-  video_r2v_480p: 0.5,
+  video_r2v_480p: 0.6,
   video_r2v_768p: 0.8,
   video_r2v_1080p: 1.0,
-  video_ia2v_480p: 0.5,
+  video_ia2v_480p: 0.6,
   video_ia2v_768p: 0.8,
   video_ia2v_1080p: 1.0,
   // 视频渠道价格表（按渠道+分辨率 积分/秒；/api/pricing 返回同结构）
   video: {
-    autodl: { "480p": 0.5, "768p": 0.8, "1080p": 1.0 },
+    autodl: { "480p": 0.6, "768p": 0.8, "1080p": 1.0 },
     wan22:  { "480p": 1.0, "576p": 1.2, "720p": 1.5, "1080p": 2.0 },
   },
   // 视频渠道元数据（名称/描述）
