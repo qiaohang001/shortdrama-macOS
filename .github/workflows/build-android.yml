@@ -76,7 +76,7 @@ jobs:
       - name: Build Android APK
         uses: tauri-apps/tauri-action@v0
         with:
-          args: --target android
+          args: --target aarch64-linux-android
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
