@@ -115,3 +115,19 @@ jobs:
           path: |
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
+
+      # 发布为 GitHub Release（公开资产，可匿名下载；官网下载可直接指向 Release asset，
+      # 避免每次都要带鉴权拉 artifact）
+      - name: Publish Android Release (auto)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="android-${GITHUB_RUN_NUMBER}"
+          APKS=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | grep -v unsigned | tr '\n' ' ')
+          if [ -z "$APKS" ]; then APKS=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | tr '\n' ' '); fi
+          gh release create "$TAG" $APKS \
+            --repo "${{ github.repository }}" \
+            --title "烬序影墟 Android Build #${GITHUB_RUN_NUMBER}" \
+            --notes "自动构建产物（debug keystore 签名，可安装）" \
+            --clobber 2>&1 || echo "release 已存在或失败，跳过"
