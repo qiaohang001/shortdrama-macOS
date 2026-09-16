@@ -111,4 +111,3 @@ jobs:
               --data-binary "@$f" "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RID/assets?name=$enc" > /dev/null
             echo "asset uploaded: $name"
           done
-          fi
