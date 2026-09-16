@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { downloadUrl, saveBlob } from "../../utils.js";
-import { runDispatchJob, api, generateImage, extractTail, concatVideos } from "../../dispatch-jobs.js";
+import { runDispatchJob, api, generateImage, img2imgImage, extractTail, concatVideos } from "../../dispatch-jobs.js";
 import { isLoggedIn, precheckCredits, getCreditBalance } from "../../utils/backend-api.js";
 import { getAppSetting, saveAppSetting } from "../../utils/app-settings.js";
 import { calcVideoPrice, getPrice } from "../../utils/pricing-utils.js";
@@ -942,6 +942,63 @@ ${shotTexts}`;
       await refreshBalanceAfter();
     } catch (err) {
       log(`❌ 场景生图失败：${err.message}`);
+    } finally {
+      setGeneratingSceneId("");
+    }
+  };
+
+  // AI 图生图（X99 IPAdapter 风格迁移）：以场景现有图为参考，锁风格生成（文生图/图生图并存，用户自选）
+  const genSceneImageX99 = async (scene) => {
+    if (generatingSceneId) return;
+    if (!isLoggedIn()) { alert("请先登录后再使用场景图生图功能"); return; }
+    if (!scene.image) {
+      alert("该场景还没有参考图，请先用「🤖 生成图片」生成一张场景图，再使用图生图参考生成");
+      return;
+    }
+    const imgPrice = getPrice("image_generate", 3.0);
+    try {
+      const precheck = await precheckCredits(imgPrice, "image", `场景图生图：${scene.name}`);
+      if (!precheck.sufficient && precheck.sufficient !== undefined) {
+        log(`❌ 积分不足：需要${imgPrice}积分，当前余额${precheck.balance || 0}积分`);
+        alert(`积分不足！场景图生图需要${imgPrice}积分，当前余额${precheck.balance || 0}积分。请充值后再试。`);
+        return;
+      }
+    } catch (e) {
+      log(`⚠️ 积分预校验失败：${e.message}`);
+    }
+    setGeneratingSceneId(scene.id);
+    log(`正在以当前场景图为参考生成（X99 风格迁移）「${scene.name}」...`);
+    try {
+      const prompt = scene.prompt || scene.desc || scene.name;
+      const seed = Math.floor(Math.random() * 2147483647);
+      const res = await img2imgImage({ image_url: scene.image, prompt, negative_prompt: "", seed });
+      const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
+      if (!imageUrl) throw new Error("未返回图片地址");
+      updateScenes(scenes.map(s => s.id === scene.id ? { ...s, image: imageUrl } : s));
+      // 同时存入素材库
+      try {
+        const currentAssets = project?.assets || [];
+        const newImageAsset = {
+          id: "a_scene_image_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8),
+          type: "image",
+          title: `${scene.name}场景图（X99风格迁移 ${new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}）`,
+          url: imageUrl,
+          status: "ready",
+          tags: ["场景生图", scene.name],
+          favorite: false,
+          sceneId: scene.id,
+          sceneName: scene.name,
+          createdAt: Date.now(),
+        };
+        update({ assets: [newImageAsset, ...currentAssets] });
+        log(`✅ 场景图已存入素材库：${newImageAsset.title}`);
+      } catch (e) {
+        log(`⚠️ 场景图存入素材库失败：${e.message}`);
+      }
+      log(`✅ 场景「${scene.name}」图生图成功（X99 风格迁移）`);
+      await refreshBalanceAfter();
+    } catch (err) {
+      log(`❌ 场景图生图失败：${err.message}`);
     } finally {
       setGeneratingSceneId("");
     }
@@ -2007,7 +2064,15 @@ ${shotTexts}`;
                           onClick={() => genSceneImage(scene)}
                           disabled={!!generatingSceneId}
                         >
-                          {generatingSceneId === scene.id ? "⏳ 生成中..." : `🤖 生成图片（${getPrice("image_generate", 3.0)}积分）`}
+                          {generatingSceneId === scene.id ? "⏳ 生成中..." : `🤖 文生图（${getPrice("image_generate", 3.0)}积分）`}
+                        </button>
+                        <button
+                          style={{ padding: "5px 10px", border: "1px solid #5CE1E6", borderRadius: 5, background: "rgba(92,225,230,0.12)", color: "#5CE1E6", cursor: scene.image && !generatingSceneId ? "pointer" : "not-allowed", fontSize: 11, opacity: scene.image ? 1 : 0.5 }}
+                          onClick={() => { if (scene.image) genSceneImageX99(scene); }}
+                          disabled={!!generatingSceneId}
+                          title={scene.image ? "以当前场景图为参考，X99 IPAdapter 风格迁移生成（保持风格一致）" : "请先用「🤖 文生图」生成一张场景图作为参考"}
+                        >
+                          {generatingSceneId === scene.id ? "⏳ 生成中..." : `🎨 图生图（${getPrice("image_generate", 3.0)}积分）`}
                         </button>
                         <button
                           style={{ padding: "5px 10px", border: "1px solid #7A5CFF", borderRadius: 5, background: "rgba(122,92,255,0.1)", color: "#7A5CFF", cursor: "pointer", fontSize: 11 }}

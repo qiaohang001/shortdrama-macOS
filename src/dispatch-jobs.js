@@ -227,7 +227,7 @@ export async function generateImage({ prompt, model = "Qwen/Qwen-Image", size = 
 }
 
 /**
- * 图生图（A09-QwenControlNet）：参考图 + 提示词，自动计费。
+ * 图生图（X99-IPAdapter风格迁移）：参考图 + 提示词，自动计费。
  * @param {Object} params
  * @param {string} params.image_url      - 参考图 URL（必传）
  * @param {string} params.prompt         - 正向提示词

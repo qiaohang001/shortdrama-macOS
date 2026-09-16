@@ -310,14 +310,17 @@ export async function saveBlob(filename, blob) {
       }
       const data = btoa(binary);
       const path = await invoke("save_file", { dir: "", filename, data });
+      if (typeof window !== "undefined" && window.alert) window.alert(`✅ 已保存到：${path}`);
       return { ok: true, path };
     } catch (e) {
       console.warn("Tauri save_file 失败，回退浏览器下载:", e);
       downloadBlob(filename, blob);
+      if (typeof window !== "undefined" && window.alert) window.alert("已开始下载：" + filename);
       return { ok: false, err: String((e && e.message) || e) };
     }
   }
   downloadBlob(filename, blob);
+  if (typeof window !== "undefined" && window.alert) window.alert("已开始下载：" + filename);
   return { ok: true };
 }
 
@@ -342,6 +345,7 @@ export async function downloadUrl(url, filename) {
       const { invoke } = await import("@tauri-apps/api/core");
       const path = await invoke("download_url", { url, filename });
       console.log("已下载到:", path);
+      if (typeof window !== "undefined" && window.alert) window.alert(`✅ 已保存到：${path}`);
       return true;
     } catch (e) {
       // Rust 下载失败（URL 不可达 / 实例未开等），明确报错而不是静默打开空白页

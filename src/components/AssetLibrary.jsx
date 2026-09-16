@@ -186,7 +186,7 @@ export function AssetLibrary({ project, update, log, onUseDub, onUseEdit }) {
   const [analyzeBusy, setAnalyzeBusy] = useState(false);
   const [selectedStyle, setSelectedStyle] = useState("cinematic");
   const [selectedAspectRatio, setSelectedAspectRatio] = useState("1:1");
-  // 场景风格参考图：选中已有场景图后，生成场景图走 A09 图生图保持风格一致；空 = 文生图
+  // 场景风格参考图：选中已有场景图后，生成场景图走 X99 图生图（IPAdapter 风格迁移）保持风格一致；空 = 文生图
   const [sceneRefId, setSceneRefId] = useState("");
   const fileRef = React.useRef(null);
   const char3dRef = React.useRef(null);
@@ -393,7 +393,7 @@ ${text.slice(0, 12000)}`;
     if (!desc) return;
     patchScene(s.id, { prompt: desc, desc: s.desc || desc, model3d: { ...(s.model3d || {}), status: "generating_image" } });
     try {
-      // 风格参考图：若用户在上方选中了已有场景图，走 A09 图生图保持风格一致
+      // 风格参考图：若用户在上方选中了已有场景图，走 X99 图生图（IPAdapter 风格迁移）保持风格一致
       const refScene = sceneRefId ? scenes.find((x) => x.id === sceneRefId && x.imageUrl) : null;
       const styleObj = STYLE_OPTIONS.find(s => s.value === selectedStyle) || STYLE_OPTIONS[0];
       const styleDesc = styleObj.desc;
@@ -402,7 +402,7 @@ ${text.slice(0, 12000)}`;
       const prompt = `纯场景空镜/环境概念图，绝对禁止出现任何人物、人形、剪影、角色或拟人形象，画面里只呈现环境、建筑、自然、道具与氛围。\n根据以下场景描述，判断时代背景（古代/现代/民国/玄幻等）并生成对应环境。\n场景描述：${desc}\n要求：${styleDesc}，影视短剧空镜/场景概念图风格，高清写实，构图完整，氛围鲜明，光影细腻，色彩协调，空无一人的纯粹场景，无人物主体、无人形、无剪影、无角色、无任何与人类相关的元素，无文字、无水印、无边框。${dramaModifier(project.dramaType)}`;
       let res;
       if (refScene) {
-        if (log) log(`🎨 参考场景图「${refScene.name}」生成（A09 图生图，保持风格一致）…`);
+        if (log) log(`🎨 参考场景图「${refScene.name}」生成（X99 风格迁移，保持风格一致）…`);
         res = await img2imgImage({
           image_url: refScene.imageUrl,
           prompt,
@@ -776,7 +776,7 @@ ${text.slice(0, 12000)}`;
                 value={sceneRefId}
                 onChange={(e) => setSceneRefId(e.target.value)}
                 style={{ padding: "6px 10px", border: "1px solid var(--border, rgba(255,255,255,0.08))", borderRadius: 6, background: "var(--input-bg, #0f141e)", color: "var(--text, #e8ecf3)", fontSize: 12, cursor: "pointer", maxWidth: 220 }}
-                title="参考已有场景图生成（A09 图生图，保持风格一致）；不选则普通文生图"
+                title="参考已有场景图生成（X99 IPAdapter 风格迁移，保持风格一致）；不选则普通文生图"
               >
                 <option value="">不参考（文生图）</option>
                 {scenes.filter((x) => x.imageUrl).map((x) => (

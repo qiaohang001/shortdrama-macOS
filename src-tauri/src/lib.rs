@@ -3,14 +3,22 @@ use std::process::Command as StdCommand;
 use tauri::Manager;
 use base64::Engine;
 
+/// 用户主目录（macOS 用 HOME，Windows 用 USERPROFILE），用于定位「下载」目录
+fn user_home() -> String {
+    #[cfg(target_os = "macos")]
+    let home = std::env::var("HOME").unwrap_or_default();
+    #[cfg(not(target_os = "macos"))]
+    let home = std::env::var("USERPROFILE").unwrap_or_default();
+    home
+}
+
 #[tauri::command]
 fn save_file(dir: String, filename: String, data: String) -> Result<String, String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&data)
         .map_err(|e| format!("解码失败: {e}"))?;
     let base = if dir.is_empty() {
-        let home = std::env::var("USERPROFILE").unwrap_or_default();
-        std::path::PathBuf::from(home).join("Downloads")
+        std::path::PathBuf::from(user_home()).join("Downloads")
     } else {
         std::path::PathBuf::from(dir)
     };
@@ -33,9 +41,11 @@ fn safe_filename(name: &str, fallback: &str) -> String {
 /// 无 CORS、无超大 base64 内存问题；失败时返回可读原因。
 async fn fetch_to(url: &str, dir: &std::path::Path, filename: &str) -> Result<std::path::PathBuf, String> {
     let _ = std::fs::create_dir_all(dir);
-    let path = dir.join(filename);
+    let mut path = dir.join(filename);
     let resp = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
+        // 带浏览器 UA，避免部分对象存储（COS/OSS）拦截无 UA 或脚本 UA 的请求
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
         .build()
         .map_err(|e| format!("HTTP 客户端初始化失败: {e}"))?
         .get(url)
@@ -44,6 +54,27 @@ async fn fetch_to(url: &str, dir: &std::path::Path, filename: &str) -> Result<st
         .map_err(|e| format!("下载失败（{url}）: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("下载失败（{url}）: HTTP {}", resp.status()));
+    }
+    // 文件名没有扩展名时按 Content-Type 自动补，避免存成无后缀文件
+    if path.extension().is_none() {
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_lowercase();
+        let ext = if ct.contains("video/mp4") { "mp4" }
+            else if ct.contains("video/webm") { "webm" }
+            else if ct.contains("video/quicktime") { "mov" }
+            else if ct.contains("image/png") { "png" }
+            else if ct.contains("image/jpeg") { "jpg" }
+            else if ct.contains("image/webp") { "webp" }
+            else if ct.contains("audio/mpeg") { "mp3" }
+            else if ct.contains("audio/wav") { "wav" }
+            else if ct.contains("application/json") { "json" }
+            else if ct.contains("application/pdf") { "pdf" }
+            else { "bin" };
+        path.set_extension(ext);
     }
     let mut out = std::fs::File::create(&path).map_err(|e| format!("创建文件失败: {e}"))?;
     let mut stream = resp.bytes_stream();
@@ -59,8 +90,7 @@ async fn fetch_to(url: &str, dir: &std::path::Path, filename: &str) -> Result<st
 /// 桌面端下载：Rust 侧直接拉取 URL 到系统「下载」目录（不经前端 base64/IPC）。
 #[tauri::command]
 async fn download_url(url: String, filename: String) -> Result<String, String> {
-    let home = std::env::var("USERPROFILE").unwrap_or_default();
-    let dir = std::path::PathBuf::from(&home).join("Downloads");
+    let dir = std::path::PathBuf::from(user_home()).join("Downloads");
     let name = safe_filename(&filename, "download");
     let path = fetch_to(&url, &dir, &name).await?;
     Ok(path.to_string_lossy().to_string())
@@ -146,8 +176,7 @@ fn export_intro_mp4(
     }
 
     let base = if dir.is_empty() {
-        let home = std::env::var("USERPROFILE").unwrap_or_default();
-        std::path::PathBuf::from(home).join("Downloads")
+        std::path::PathBuf::from(user_home()).join("Downloads")
     } else {
         std::path::PathBuf::from(dir)
     };
@@ -905,8 +934,7 @@ async fn export_timeline(
     }
 
     // 落盘到「下载」目录，返回路径给前端
-    let home = std::env::var("USERPROFILE").unwrap_or_default();
-    let dir = std::path::PathBuf::from(&home).join("Downloads");
+    let dir = std::path::PathBuf::from(user_home()).join("Downloads");
     let _ = std::fs::create_dir_all(&dir);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

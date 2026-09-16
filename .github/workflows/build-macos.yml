@@ -86,3 +86,19 @@ jobs:
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
+
+      # 发布为 GitHub Release（公开资产，可匿名下载；官网下载可直接指向 Release asset）
+      - name: Publish macOS Release (auto)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="mac-${GITHUB_RUN_NUMBER}"
+          DMGS=$(find src-tauri/target/release/bundle/dmg -name "*.dmg" | tr '\n' ' ')
+          if [ -n "$DMGS" ]; then
+            gh release create "$TAG" $DMGS \
+              --repo "${{ github.repository }}" \
+              --title "烬序影墟 macOS Build #${GITHUB_RUN_NUMBER}" \
+              --notes "自动构建产物（DMG 安装包，可直接安装）" \
+              --clobber 2>&1 || echo "release 已存在或失败，跳过"
+          fi
