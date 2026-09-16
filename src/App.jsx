@@ -21,6 +21,7 @@ import { isLoggedIn, getCurrentUser, logout as apiLogout, changePassword } from 
 import { getCurrentUser as getDispatchUser, MEMBERSHIP_NAMES } from "./dispatch-jobs";
 import { defaultProject, templateProject, cloneProject, packageProject, isPackage, metaOf, PROJECT_TEMPLATES, DRAMA_TYPES, normalizeProject, relTime } from "./utils.js";
 import { saveBlob } from "./utils.js";
+import { IS_ANDROID } from "./lib/platform.js";
 import jinsuLogo from "./assets/jinsu-logo.png";
 import jinsuLogoH from "./assets/jinsu-logo-h.png";
 
@@ -153,6 +154,14 @@ export function App() {
 
   const [theme, setTheme] = useState(() => localStorage.getItem("THEME") || "dark");
   const [showSettings, setShowSettings] = useState(false);
+  // 移动端适配：Android APP / 窄窗口 -> 隐藏桌面菜单栏、侧栏项目面板收成抽屉
+  const [isMobile, setIsMobile] = useState(() => IS_ANDROID || (typeof window !== "undefined" && window.innerWidth < 860));
+  const [showLeftPanel, setShowLeftPanel] = useState(false);
+  useEffect(() => {
+    const onResize = () => setIsMobile(IS_ANDROID || (typeof window !== "undefined" && window.innerWidth < 860));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const [showRecharge, setShowRecharge] = useState(false);
   const [showMembership, setShowMembership] = useState(false);
   const [showTemplateMarket, setShowTemplateMarket] = useState(false);
@@ -807,35 +816,123 @@ export function App() {
 
   const isFullscreenCanvas = activeTab === "stage3d";
 
+  // 左侧项目面板（桌面三栏 / 移动端抽屉共用）
+  const leftPanel = (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", padding: 14, boxSizing: "border-box" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <div style={s.sdHead}>项目</div>
+        {isMobile && (
+          <button onClick={() => setShowLeftPanel(false)} style={{ border: "none", background: "transparent", color: "var(--text-muted, #5d6779)", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>✕</button>
+        )}
+      </div>
+      <select style={s.select} value={activeId || ""} onChange={(e) => switchProject(e.target.value)}>
+        {projects.map((p) => (<option key={p.id} value={p.id}>{p.title}</option>))}
+      </select>
+      <input style={{ ...s.select, marginTop: 10 }} value={project?.title || "未命名项目"} onChange={(e) => renameProject(e.target.value)} />
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button style={s.ghostBtn} onClick={newProject}>+ 新项目</button>
+        <button style={s.ghostBtnDanger} onClick={deleteProject}>删除</button>
+      </div>
+      <div style={{ borderTop: "1px solid var(--border, rgba(255,255,255,0.08))", margin: "14px 0", paddingTop: 10 }}>
+        <div style={{ fontSize: 12, color: "var(--text-muted, #5d6779)", marginBottom: 8 }}>进度</div>
+        <div style={s.progressTrack}><div style={{ ...s.progressFill, width: `${totalScenes ? (doneScenes / totalScenes * 100) : 0}%` }} /></div>
+        <div style={{ fontSize: 11, color: "var(--text-muted, #5d6779)", marginTop: 4 }}>{doneScenes}/{totalScenes} 分场已出片</div>
+      </div>
+      <div style={{ flex: 1 }} />
+      <div style={{ borderTop: "1px solid var(--border, rgba(255,255,255,0.08))", paddingTop: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <span style={{ fontSize: 12, color: "var(--text-muted, #5d6779)" }}>任务队列（{activeQueue.length} 进行中）</span>
+          {activeQueue.length > 0 && (
+            <button style={s.miniLink} onClick={batchCancelTasks}>全部取消</button>
+          )}
+        </div>
+        {(project?.tasks || []).length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--text-muted, #5d6779)" }}>暂无任务</div>
+        ) : (
+          (project.tasks || []).map((t) => {
+            const pct = Math.max(0, Math.min(100, t.progress ?? 0));
+            const stColor = { pending: "#f59e0b", running: "#3b82f6", paused: "#a855f7", done: "#22c55e", failed: "#ef4444", canceled: "#64748b" }[t.status] || "#64748b";
+            return (
+              <div key={t.id} style={{ border: "1px solid var(--border, rgba(255,255,255,0.08))", borderRadius: 8, padding: "8px 10px", marginBottom: 8, background: "var(--panel, #161d2a)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ color: "var(--text, #e8ecf3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 130 }}>{t.label}</span>
+                  <span style={{ color: stColor, fontSize: 11, flex: "0 0 auto", marginLeft: 6 }}>{t.status === "running" ? "渲染中" : t.status === "pending" ? "排队" : t.status === "paused" ? "已暂停" : t.status === "done" ? "完成" : t.status === "failed" ? "失败" : t.status === "canceled" ? "已取消" : t.status}</span>
+                </div>
+                {["done", "failed", "canceled"].includes(t.status) && <div style={s.progressTrack}><div style={{ ...s.progressFill, width: pct + "%", background: stColor }} /></div>}
+                <div style={{ fontSize: 10, color: "var(--text-muted, #5d6779)", marginTop: 4, lineHeight: 1.4 }}>
+                  {["pending", "running", "paused"].includes(t.status)
+                    ? `已用 ${fmtElapsed(t)} · 开始 ${fmtClock(t.startedAt)}`
+                    : t.status === "completed"
+                    ? `耗时 ${fmtElapsed(t)} · 完成 ${fmtClock(t.finishedAt)}`
+                    : t.status === "failed"
+                    ? `失败于 ${fmtClock(t.finishedAt)}`
+                    : t.status === "canceled"
+                    ? `已取消 ${fmtClock(t.finishedAt)}`
+                    : ""}
+                </div>
+                {t.status === "running" && t.detail && (
+                  <div style={{ fontSize: 10, color: "var(--text-muted, #5d6779)", marginTop: 2 }}>状态：{t.detail}</div>
+                )}
+                {t.status === "failed" && (t.detail || t.error) && (
+                  <div style={{ fontSize: 10, color: "var(--danger, #ef4444)", marginTop: 2, lineHeight: 1.4, maxHeight: 28, overflow: "hidden" }}>⚠ {t.detail || t.error}</div>
+                )}
+                <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
+                  {["pending", "running"].includes(t.status) && <button style={s.miniBtn} onClick={() => cancelTask(t.id)}>取消</button>}
+                  {t.status === "running" && <button style={s.miniBtn} onClick={() => pauseTask(t.id)}>暂停</button>}
+                  {t.status === "paused" && <button style={s.miniBtn} onClick={() => resumeTask(t.id)}>继续</button>}
+                  {t.status === "failed" && <button style={s.miniBtnOn} onClick={() => retryTask(t.id)}>重试</button>}
+                  {t.url && (t.type === "video" || t.type === "audio") && (
+                    <a style={{ ...s.miniBtn, textDecoration: "none", color: "#5ce1e6", textAlign: "center" }} href={t.url} target="_blank" rel="noreferrer">查看</a>
+                  )}
+                  {t.priority != null && <span style={{ fontSize: 10, color: "var(--text-muted, #5d6779)", alignSelf: "center" }}>优先级 {t.priority}</span>}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+      {getAppSetting("showGenerateLog", true) && (
+      <div style={{ marginTop: 12, borderTop: "1px solid var(--border, rgba(255,255,255,0.08))", paddingTop: 10 }}>
+        <div style={{ fontSize: 12, color: "var(--text-muted, #5d6779)", marginBottom: 6 }}>状态日志（带时间）</div>
+        <div style={{ fontSize: 10, lineHeight: 1.5, color: "var(--text-muted, #8b95a7)", maxHeight: 160, overflowY: "auto", whiteSpace: "pre-wrap", fontFamily: "ui-monospace, monospace", background: "var(--panel, #161d2a)", borderRadius: 6, padding: 6 }}>
+          {logLines.length === 0 ? "（暂无日志）" : logLines.slice(-12).join("\n")}
+        </div>
+      </div>
+      )}
+    </div>
+  );
+
   return (
     <SessionProvider>
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg, #0b0f17)", fontFamily: "var(--font)" }}>
-      <MenuBar menus={menus} />
-      <TopBar
+      {!isMobile && <MenuBar menus={menus} />}
+            <TopBar
         title={<span style={{ display: "flex", alignItems: "center", gap: 10 }}><span style={s.badge}>EXE</span><b>烬序・影墟</b></span>}
-        actions={<span style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ color: "var(--text-muted, #5d6779)", fontSize: 12 }}>{project?.title || "未命名项目"}</span>
-          {/* 积分显示（已登录用户） */}
+        actions={<span style={{ display: "flex", alignItems: "center", gap: isMobile ? 8 : 12, flexWrap: "nowrap" }}>
+          {isMobile && (
+            <button onClick={() => setShowLeftPanel(true)} style={{ border: "1px solid var(--border, rgba(255,255,255,0.14))", borderRadius: 6, padding: "4px 9px", background: "var(--panel, #161d2a)", color: "var(--text, #e8ecf3)", cursor: "pointer", fontSize: 13, lineHeight: 1 }} title="项目面板与任务">☰</button>
+          )}
+          {!isMobile && project?.title && (
+            <span style={{ color: "var(--text-muted, #5d6779)", fontSize: 12 }}>{project.title}</span>
+          )}
           {currentUser && (
             <span style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 6, fontSize: 12, color: "#f59e0b" }}>
               💰 {creditBalance} 积分
             </span>
           )}
           <button onClick={() => openPurchasePage("recharge")} style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "4px 10px", background: "transparent", color: "var(--text)", cursor: "pointer", fontSize: 12 }}>💰 充值</button>
-          {/* 会员状态显示（已登录用户） */}
           {currentUser && isVip && (
             <span style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", background: "linear-gradient(135deg, rgba(245,158,11,0.15), rgba(234,88,12,0.1))", border: "1px solid rgba(245,158,11,0.4)", borderRadius: 6, fontSize: 11, color: "#f59e0b" }} title="在设置菜单中打开账户设置查看详情">
               💎 {membershipInfo?.plan_name || membershipInfo?.plan || "VIP会员"} · {membershipInfo?.days_remaining > 0 ? `剩${membershipInfo.days_remaining}天` : (membershipInfo ? "已过期" : "加载中...")}
             </span>
           )}
-          {/* 登录/用户信息 */}
           {currentUser ? (
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <button onClick={() => setShowAccountSettings(true)} style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "4px 10px", background: "var(--panel, #161d2a)", color: "var(--text)", cursor: "pointer", fontSize: 12 }} title="账户设置">
                 👤 账户
               </button>
-              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{currentUser.nickname || currentUser.phone}</span>
-              <button onClick={handleLogout} style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "4px 8px", background: "transparent", color: "var(--text-muted)", cursor: "pointer", fontSize: 11 }}>退出</button>
+              {!isMobile && <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{currentUser.nickname || currentUser.phone}</span>}
+              {!isMobile && <button onClick={handleLogout} style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "4px 8px", background: "transparent", color: "var(--text-muted)", cursor: "pointer", fontSize: 11 }}>退出</button>}
             </span>
           ) : (
             <button onClick={() => openLogin("login")} style={{ border: "none", borderRadius: 6, padding: "4px 12px", background: "linear-gradient(135deg, #7A5CFF, #5CE1E6)", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>登录</button>
@@ -843,101 +940,34 @@ export function App() {
         </span>}
       />
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-        <DockNav items={dockItems} textOnly />
+        <DockNav items={dockItems} textOnly={!isMobile} />
         <div style={{ flex: 1, display: "flex", minWidth: 0 }}>
           {isFullscreenCanvas ? (
             <div style={{ width: "100%", height: "100%", overflow: "hidden" }}>{center}</div>
+          ) : isMobile ? (
+            <div style={{ flex: 1, minWidth: 0, overflow: "auto", position: "relative" }}>{center}</div>
           ) : (
           <ThreePane
             leftWidth={200}
             right={null}
-            left={(
-              <div style={{ display: "flex", flexDirection: "column", height: "100%", padding: 14 }}>
-                <div style={s.sdHead}>项目</div>
-                <select style={s.select} value={activeId || ""} onChange={(e) => switchProject(e.target.value)}>
-                  {projects.map((p) => (<option key={p.id} value={p.id}>{p.title}</option>))}
-                </select>
-                <input style={{ ...s.select, marginTop: 10 }} value={project?.title || "未命名项目"} onChange={(e) => renameProject(e.target.value)} />
-                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                  <button style={s.ghostBtn} onClick={newProject}>+ 新项目</button>
-                  <button style={s.ghostBtnDanger} onClick={deleteProject}>删除</button>
-                </div>
-                <div style={{ borderTop: "1px solid var(--border, rgba(255,255,255,0.08))", margin: "14px 0", paddingTop: 10 }}>
-                  <div style={{ fontSize: 12, color: "var(--text-muted, #5d6779)", marginBottom: 8 }}>进度</div>
-                  <div style={s.progressTrack}><div style={{ ...s.progressFill, width: `${totalScenes ? (doneScenes / totalScenes * 100) : 0}%` }} /></div>
-                  <div style={{ fontSize: 11, color: "var(--text-muted, #5d6779)", marginTop: 4 }}>{doneScenes}/{totalScenes} 分场已出片</div>
-                </div>
-                <div style={{ flex: 1 }} />
-                <div style={{ borderTop: "1px solid var(--border, rgba(255,255,255,0.08))", paddingTop: 10 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                    <span style={{ fontSize: 12, color: "var(--text-muted, #5d6779)" }}>任务队列（{activeQueue.length} 进行中）</span>
-                    {activeQueue.length > 0 && (
-                      <button style={s.miniLink} onClick={batchCancelTasks}>全部取消</button>
-                    )}
-                  </div>
-                  {(project?.tasks || []).length === 0 ? (
-                    <div style={{ fontSize: 12, color: "var(--text-muted, #5d6779)" }}>暂无任务</div>
-                  ) : (
-                    (project.tasks || []).map((t) => {
-                      const pct = Math.max(0, Math.min(100, t.progress ?? 0));
-                      const stColor = { pending: "#f59e0b", running: "#3b82f6", paused: "#a855f7", done: "#22c55e", failed: "#ef4444", canceled: "#64748b" }[t.status] || "#64748b";
-                      return (
-                        <div key={t.id} style={{ border: "1px solid var(--border, rgba(255,255,255,0.08))", borderRadius: 8, padding: "8px 10px", marginBottom: 8, background: "var(--panel, #161d2a)" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
-                            <span style={{ color: "var(--text, #e8ecf3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 130 }}>{t.label}</span>
-                            <span style={{ color: stColor, fontSize: 11, flex: "0 0 auto", marginLeft: 6 }}>{t.status === "running" ? "渲染中" : t.status === "pending" ? "排队" : t.status === "paused" ? "已暂停" : t.status === "done" ? "完成" : t.status === "failed" ? "失败" : t.status === "canceled" ? "已取消" : t.status}</span>
-                          </div>
-                          {["done", "failed", "canceled"].includes(t.status) && <div style={s.progressTrack}><div style={{ ...s.progressFill, width: pct + "%", background: stColor }} /></div>}
-                          <div style={{ fontSize: 10, color: "var(--text-muted, #5d6779)", marginTop: 4, lineHeight: 1.4 }}>
-                            {["pending", "running", "paused"].includes(t.status)
-                              ? `已用 ${fmtElapsed(t)} · 开始 ${fmtClock(t.startedAt)}`
-                              : t.status === "completed"
-                              ? `耗时 ${fmtElapsed(t)} · 完成 ${fmtClock(t.finishedAt)}`
-                              : t.status === "failed"
-                              ? `失败于 ${fmtClock(t.finishedAt)}`
-                              : t.status === "canceled"
-                              ? `已取消 ${fmtClock(t.finishedAt)}`
-                              : ""}
-                          </div>
-                          {t.status === "running" && t.detail && (
-                            <div style={{ fontSize: 10, color: "var(--text-muted, #5d6779)", marginTop: 2 }}>状态：{t.detail}</div>
-                          )}
-                          {t.status === "failed" && (t.detail || t.error) && (
-                            <div style={{ fontSize: 10, color: "var(--danger, #ef4444)", marginTop: 2, lineHeight: 1.4, maxHeight: 28, overflow: "hidden" }}>⚠ {t.detail || t.error}</div>
-                          )}
-                          <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
-                            {["pending", "running"].includes(t.status) && <button style={s.miniBtn} onClick={() => cancelTask(t.id)}>取消</button>}
-                            {t.status === "running" && <button style={s.miniBtn} onClick={() => pauseTask(t.id)}>暂停</button>}
-                            {t.status === "paused" && <button style={s.miniBtn} onClick={() => resumeTask(t.id)}>继续</button>}
-                            {t.status === "failed" && <button style={s.miniBtnOn} onClick={() => retryTask(t.id)}>重试</button>}
-                            {t.url && (t.type === "video" || t.type === "audio") && (
-                              <a style={{ ...s.miniBtn, textDecoration: "none", color: "#5ce1e6", textAlign: "center" }} href={t.url} target="_blank" rel="noreferrer">查看</a>
-                            )}
-                            {t.priority != null && <span style={{ fontSize: 10, color: "var(--text-muted, #5d6779)", alignSelf: "center" }}>优先级 {t.priority}</span>}
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-                {getAppSetting("showGenerateLog", true) && (
-                <div style={{ marginTop: 12, borderTop: "1px solid var(--border, rgba(255,255,255,0.08))", paddingTop: 10 }}>
-                  <div style={{ fontSize: 12, color: "var(--text-muted, #5d6779)", marginBottom: 6 }}>状态日志（带时间）</div>
-                  <div style={{ fontSize: 10, lineHeight: 1.5, color: "var(--text-muted, #8b95a7)", maxHeight: 160, overflowY: "auto", whiteSpace: "pre-wrap", fontFamily: "ui-monospace, monospace", background: "var(--panel, #161d2a)", borderRadius: 6, padding: 6 }}>
-                    {logLines.length === 0 ? "（暂无日志）" : logLines.slice(-12).join("\n")}
-                  </div>
-                </div>
-                )}
-              </div>
-            )}
+            left={leftPanel}
             center={center}
           />
+          )}
+          {isMobile && showLeftPanel && (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 1200, display: "flex" }} onClick={() => setShowLeftPanel(false)}>
+              <div style={{ width: "min(330px, 88vw)", height: "100%", background: "var(--bg-elevated, #111621)", overflowY: "auto", boxSizing: "border-box" }} onClick={(e) => e.stopPropagation()}>
+                {leftPanel}
+              </div>
+            </div>
+          )}
           )}
         </div>
       </div>
       <StatusBar
-        left={<><span>🎬 {project?.title || "未命名项目"}</span><span>{totalScenes} 分场 · 已出片 {doneScenes}</span></>}
-        right={<><span>💾 自动保存中</span><span>🖥 本地数据已同步</span></>}
+        left={<><span>🎬 {project?.title || "未命名项目"}</span>{!isMobile && <span>{totalScenes} 分场 · 已出片 {doneScenes}</span>}</>}
+        right={!isMobile ? <><span>💾 自动保存中</span><span>🖥 本地数据已同步</span></> : <span>💾 自动保存中</span>}
+      />
       />
       <input ref={fileInputRef} type="file" accept="application/json" style={{ display: "none" }} onChange={onFilePicked} />
       {showSettings && (
