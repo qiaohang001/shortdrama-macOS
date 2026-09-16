@@ -583,6 +583,7 @@ export const VideoGenBoard = ({ project, update, log, externalFirstFrame, onClea
   const [showSceneSelect, setShowSceneSelect] = useState(""); // 展开场景选择的分镜id
   const [analyzingScenes, setAnalyzingScenes] = useState(false);
   const [generatingSceneId, setGeneratingSceneId] = useState("");
+  const [x99RefPicker, setX99RefPicker] = useState(null); // {sceneId} 图生图参考图选择器
   const [refiningSceneId, setRefiningSceneId] = useState("");
   const [addingScene, setAddingScene] = useState(false);
   const [newSceneName, setNewSceneName] = useState("");
@@ -947,12 +948,13 @@ ${shotTexts}`;
     }
   };
 
-  // AI 图生图（X99 IPAdapter 风格迁移）：以场景现有图为参考，锁风格生成（文生图/图生图并存，用户自选）
-  const genSceneImageX99 = async (scene) => {
+  // AI 图生图（X99 IPAdapter 风格迁移）：以「其他场景图 / 素材库图」为风格参考，生成当前场景
+  // 参考的是已有的图（如上一个场景），把它的画风迁移到当前场景，实现全剧场景风格统一
+  const genSceneImageX99 = async (scene, refImageUrl, refTitle) => {
     if (generatingSceneId) return;
     if (!isLoggedIn()) { alert("请先登录后再使用场景图生图功能"); return; }
-    if (!scene.image) {
-      alert("该场景还没有参考图，请先用「🤖 生成图片」生成一张场景图，再使用图生图参考生成");
+    if (!refImageUrl) {
+      alert("请先选择一张参考图（其他场景图或素材库图片）");
       return;
     }
     const imgPrice = getPrice("image_generate", 3.0);
@@ -967,11 +969,11 @@ ${shotTexts}`;
       log(`⚠️ 积分预校验失败：${e.message}`);
     }
     setGeneratingSceneId(scene.id);
-    log(`正在以当前场景图为参考生成（X99 风格迁移）「${scene.name}」...`);
+    log(`以「${refTitle || "参考图"}」为风格参考生成「${scene.name}」（X99 风格迁移）...`);
     try {
       const prompt = scene.prompt || scene.desc || scene.name;
       const seed = Math.floor(Math.random() * 2147483647);
-      const res = await img2imgImage({ image_url: scene.image, prompt, negative_prompt: "", seed });
+      const res = await img2imgImage({ image_url: refImageUrl, prompt, negative_prompt: "", seed });
       const imageUrl = res.image_url || res.url || (res.images && res.images[0]) || res.result_url;
       if (!imageUrl) throw new Error("未返回图片地址");
       updateScenes(scenes.map(s => s.id === scene.id ? { ...s, image: imageUrl } : s));
@@ -1003,6 +1005,20 @@ ${shotTexts}`;
       setGeneratingSceneId("");
     }
   };
+
+  // 图生图参考图候选：其他场景的图 + 素材库图片（去重）
+  const x99Candidates = (() => {
+    if (!x99RefPicker) return [];
+    const others = (scenes || [])
+      .filter(s => s.id !== x99RefPicker.sceneId && s.image)
+      .map(s => ({ id: "scene_" + s.id, title: `${s.name}（场景图）`, url: s.image }));
+    const assets = (project?.assets || [])
+      .filter(a => a.type === "image" && a.url)
+      .map(a => ({ id: "asset_" + a.id, title: a.title || "素材图", url: a.url }));
+    const seen = new Set();
+    return [...others, ...assets].filter(c => { if (seen.has(c.url)) return false; seen.add(c.url); return true; });
+  })();
+  const x99RefScene = x99RefPicker ? scenes.find(s => s.id === x99RefPicker.sceneId) : null;
 
   // 添加场景（手动）
   const saveNewScene = () => {
@@ -2067,10 +2083,10 @@ ${shotTexts}`;
                           {generatingSceneId === scene.id ? "⏳ 生成中..." : `🤖 文生图（${getPrice("image_generate", 3.0)}积分）`}
                         </button>
                         <button
-                          style={{ padding: "5px 10px", border: "1px solid #5CE1E6", borderRadius: 5, background: "rgba(92,225,230,0.12)", color: "#5CE1E6", cursor: scene.image && !generatingSceneId ? "pointer" : "not-allowed", fontSize: 11, opacity: scene.image ? 1 : 0.5 }}
-                          onClick={() => { if (scene.image) genSceneImageX99(scene); }}
+                          style={{ padding: "5px 10px", border: "1px solid #5CE1E6", borderRadius: 5, background: "rgba(92,225,230,0.12)", color: "#5CE1E6", cursor: !generatingSceneId ? "pointer" : "not-allowed", fontSize: 11 }}
+                          onClick={() => { if (!generatingSceneId) setX99RefPicker({ sceneId: scene.id }); }}
                           disabled={!!generatingSceneId}
-                          title={scene.image ? "以当前场景图为参考，X99 IPAdapter 风格迁移生成（保持风格一致）" : "请先用「🤖 文生图」生成一张场景图作为参考"}
+                          title="选择一张已有场景图/素材图作为风格参考（如上一个场景），用 X99 IPAdapter 风格迁移生成当前场景，保持全剧场景风格一致"
                         >
                           {generatingSceneId === scene.id ? "⏳ 生成中..." : `🎨 图生图（${getPrice("image_generate", 3.0)}积分）`}
                         </button>
@@ -2098,6 +2114,37 @@ ${shotTexts}`;
           </div>
         )}
       </div>
+
+      {/* 图生图（X99）参考图选择器：选择其他场景图/素材库图作为风格参考 */}
+      {x99RefPicker && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setX99RefPicker(null)}>
+          <div style={{ background: "#1a2130", border: "1px solid var(--border)", borderRadius: 12, padding: 16, width: "min(560px, 92vw)", maxHeight: "75vh", overflow: "auto", boxSizing: "border-box" }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>选择风格参考图（X99 图生图）</div>
+            <div style={{ fontSize: 10, color: "var(--text-muted, #8b95a7)", marginBottom: 10, lineHeight: 1.6 }}>
+              正在生成「{x99RefScene?.name}」：请选择一张 <b>已有场景图 / 素材库图片</b> 作为风格参考（例如上一个场景），
+              将把它的画风迁移到当前场景，实现全剧场景风格统一。
+            </div>
+            {x99Candidates.length === 0 ? (
+              <div style={{ fontSize: 11, color: "#f59e0b", padding: "12px 0", lineHeight: 1.6 }}>
+                暂无可用参考图。请先在其他场景用「🤖 文生图」生成一张场景图（或先在素材库存入图片），再回来使用图生图。
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(108px, 1fr))", gap: 8 }}>
+                {x99Candidates.map(c => (
+                  <div key={c.id} style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", cursor: "pointer", background: "var(--panel-2, #202838)" }}
+                    onClick={() => { const sc = x99RefScene; setX99RefPicker(null); genSceneImageX99(sc, c.url, c.title); }}>
+                    <img src={c.url} alt={c.title} style={{ width: "100%", height: 78, objectFit: "cover", display: "block", background: "#000" }} />
+                    <div style={{ fontSize: 10, padding: "5px 6px", color: "var(--text-secondary, #8b95a7)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+              <button style={{ padding: "6px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "transparent", color: "var(--text)", cursor: "pointer", fontSize: 11 }} onClick={() => setX99RefPicker(null)}>取消</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* R2V首尾帧设置 / 高级·顶级参考首帧设置 */}
       {showFirstFramePanel && (
