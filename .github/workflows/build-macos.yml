@@ -95,10 +95,20 @@ jobs:
           set -e
           TAG="mac-${GITHUB_RUN_NUMBER}"
           DMGS=$(find src-tauri/target/release/bundle/dmg -name "*.dmg" | tr '\n' ' ')
-          if [ -n "$DMGS" ]; then
-            gh release create "$TAG" $DMGS \
-              --repo "${{ github.repository }}" \
-              --title "烬序影墟 macOS Build #${GITHUB_RUN_NUMBER}" \
-              --notes "自动构建产物（DMG 安装包，可直接安装）" \
-              --clobber 2>&1 || echo "release 已存在或失败，跳过"
+          echo "DMGS=[$DMGS]"
+          if [ -z "$DMGS" ]; then echo "::error::未找到 DMG，无法发布"; exit 1; fi
+          H="Authorization: token $GH_TOKEN"
+          JSON=$(curl -s -X POST -H "$H" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases" \
+            -d "{\"tag_name\":\"$TAG\",\"name\":\"烬序影墟 macOS Build #$GITHUB_RUN_NUMBER\",\"body\":\"自动构建产物（DMG 安装包，可直接安装）\"}")
+          echo "$JSON" | grep -q '"id"' || { echo "::error::创建 Release 失败: $JSON"; exit 1; }
+          RID=$(echo "$JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
+          echo "release created id=$RID"
+          for f in $DMGS; do
+            name=$(basename "$f")
+            enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$name")
+            curl -s -X POST -H "$H" -H "Accept: application/vnd.github+json" -H "Content-Type: application/octet-stream" \
+              --data-binary "@$f" "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RID/assets?name=$enc" > /dev/null
+            echo "asset uploaded: $name"
+          done
           fi
