@@ -2657,9 +2657,9 @@ ${shotTexts}`;
                         if (sh.videoUrl.startsWith('blob:') || sh.videoUrl.startsWith('data:')) {
                           const r = await fetch(sh.videoUrl);
                           const b = await r.blob();
-                          await saveBlob(filename, b);
+                          await saveBlob(filename, b, { log });
                         } else {
-                          const success = await downloadUrl(sh.videoUrl, filename);
+                          const success = await downloadUrl(sh.videoUrl, filename, { log });
                           if (!success) {
                             if (confirm('直接下载失败，是否在浏览器中打开？')) {
                               window.open(sh.videoUrl, '_blank');

@@ -88,11 +88,16 @@ async fn fetch_to(url: &str, dir: &std::path::Path, filename: &str) -> Result<st
 }
 
 /// 桌面端下载：Rust 侧直接拉取 URL 到系统「下载」目录（不经前端 base64/IPC）。
+/// dir 为空时使用系统「下载」目录；否则使用用户自定义下载目录。
 #[tauri::command]
-async fn download_url(url: String, filename: String) -> Result<String, String> {
-    let dir = std::path::PathBuf::from(user_home()).join("Downloads");
+async fn download_url(url: String, filename: String, dir: String) -> Result<String, String> {
+    let base = if dir.trim().is_empty() {
+        std::path::PathBuf::from(user_home()).join("Downloads")
+    } else {
+        std::path::PathBuf::from(&dir)
+    };
     let name = safe_filename(&filename, "download");
-    let path = fetch_to(&url, &dir, &name).await?;
+    let path = fetch_to(&url, &base, &name).await?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -859,6 +864,7 @@ async fn export_timeline(
     bitrate: String,
     bg_color: String,
     filename: String,
+    dir: String,
 ) -> Result<String, String> {
     if clips.is_empty() {
         return Err("时间线上没有视频片段。".into());
@@ -933,8 +939,12 @@ async fn export_timeline(
         }
     }
 
-    // 落盘到「下载」目录，返回路径给前端
-    let dir = std::path::PathBuf::from(user_home()).join("Downloads");
+    // 落盘到下载目录（自定义或系统「下载」），返回路径给前端
+    let dir = if dir.trim().is_empty() {
+        std::path::PathBuf::from(user_home()).join("Downloads")
+    } else {
+        std::path::PathBuf::from(&dir)
+    };
     let _ = std::fs::create_dir_all(&dir);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

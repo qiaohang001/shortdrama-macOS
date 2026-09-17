@@ -625,7 +625,7 @@ export function App() {
   // ── 工程包导出（缺陷 §3：素材不能随 JSON 打包）────
   const exportPackage = async () => {
     const blob = new Blob([JSON.stringify(packageProject(project), null, 2)], { type: "application/json" });
-    const res = await saveBlob((project.title || "shortdrama") + "_工程包.json", blob);
+    const res = await saveBlob((project.title || "shortdrama") + "_工程包.json", blob, { log });
     if (res.ok) log("已导出工程包（含全部资产链接）：" + (res.path || ""));
     else if (res.err) log("导出失败：" + res.err);
   };
@@ -656,7 +656,7 @@ export function App() {
 
   const exportProject = async () => {
     const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json" });
-    const res = await saveBlob((project.title || "shortdrama") + ".json", blob);
+    const res = await saveBlob((project.title || "shortdrama") + ".json", blob, { log });
     if (res.ok) log("已导出项目 JSON：" + (res.path || ""));
     else if (res.err) log("导出失败：" + res.err);
   };
@@ -668,7 +668,7 @@ export function App() {
     const scenes = (project?.scenes || []).map((s) => ({ id: s.id, title: s.title || "场景", desc: s.desc || "", imageUrl: s.imageUrl || null }));
     const data = { kind: "shortdrama-cast-scenes", version: 1, projectTitle: project.title || "", exportedAt: Date.now(), cast, scenes };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const res = await saveBlob((project.title || "shortdrama") + "_角色场景.json", blob);
+    const res = await saveBlob((project.title || "shortdrama") + "_角色场景.json", blob, { log });
     if (res.ok) log(`已导出角色与场景：「${cast.length} 位角色 / ${scenes.length} 个场景」，可在 3D 导演台「导入短剧角色/场景」载入：${res.path || ""}`);
     else if (res.err) log("导出失败：" + res.err);
   };
@@ -961,13 +961,11 @@ export function App() {
               </div>
             </div>
           )}
-          )}
         </div>
       </div>
       <StatusBar
         left={<><span>🎬 {project?.title || "未命名项目"}</span>{!isMobile && <span>{totalScenes} 分场 · 已出片 {doneScenes}</span>}</>}
         right={!isMobile ? <><span>💾 自动保存中</span><span>🖥 本地数据已同步</span></> : <span>💾 自动保存中</span>}
-      />
       />
       <input ref={fileInputRef} type="file" accept="application/json" style={{ display: "none" }} onChange={onFilePicked} />
       {showSettings && (
