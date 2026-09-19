@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { generateImage, api } from "../../dispatch-jobs.js";
 import { isLoggedIn, precheckCredits, deductCredits, getCreditBalance } from "../../utils/backend-api.js";
 import { getPrice } from "../../utils/pricing-utils.js";
